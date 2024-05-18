@@ -1,3 +1,4 @@
+---
 apiVersion: monitoring.thanos.io/v1alpha1
 kind: ThanosReceiveHashring
 metadata:
@@ -6,4 +7,22 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: thanosreceivehashring-sample
 spec:
-  # TODO(user): Add fields here
+  replicas: 3
+  storageSize: 1Gi
+  objectStorageConfig:
+    key: thanos.yaml
+    name: thanos-objectstorage
+  outputHashringConfig:
+    key: x.json
+    name: blaa
+  tenants: ["fuck"]
+
+---
+kind: Secret
+apiVersion: v1
+metadata:
+  name: thanos-objectstorage
+data:
+  thanos.yaml: >-
+    dHlwZTogUzMKY29uZmlnOgogIGJ1Y2tldDogInRlbGVtZXRlci10aGFub3MtdGVzdGluZyIKICBlbmRwb2ludDogInMzLmV1LWNlbnRyYWwtMS5hbWF6b25hd3MuY29tIgogIHJlZ2lvbjogImV1LWNlbnRyYWwtMSIKICB0cmFjZToKICAgIGVuYWJsZTogZmFsc2U=
+type: Opaque

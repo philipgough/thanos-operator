@@ -4,6 +4,24 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+const (
+	// The following labels are used to identify the components and will be set on the resources created by the operator.
+	// These labels cannot be overridden by the user.
+	// See https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/#labels
+
+	NameLabel      = "app.kubernetes.io/name"
+	ComponentLabel = "app.kubernetes.io/component"
+	PartOfLabel    = "app.kubernetes.io/part-of"
+	ManagedByLabel = "app.kubernetes.io/managed-by"
+	InstanceLabel  = "app.kubernetes.io/instance"
+)
+
+// Duration is a valid time duration that can be parsed by Prometheus model.ParseDuration() function.
+// Supported units: y, w, d, h, m, s, ms
+// Examples: `30s`, `1m`, `1h20m15s`, `15d`
+// +kubebuilder:validation:Pattern:="^(0|(([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?)$"
+type Duration string
+
 // CommonThanosFields are the options available to all Thanos components.
 // +k8s:deepcopy-gen=true
 type CommonThanosFields struct {
