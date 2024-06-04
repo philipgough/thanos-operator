@@ -283,12 +283,11 @@ func (r *ThanosReceiveHashringReconciler) syncHeadlessService(
 
 	want, _ := r.headlessServiceForReceiveIngest(receiveHashring)
 	if equality.Semantic.DeepEqual(found.Spec, want.Spec) {
-		log.Info("SOMETHING NOT EQUAL")
 		return ctrl.Result{}, nil
 	}
 
 	found.Spec.ClusterIP = corev1.ClusterIPNone
-	found.Spec.Ports = getServicePorts()
+	found.Spec.Ports = getReceiveIngestServicePorts()
 
 	if err = r.Update(ctx, found); err != nil {
 		log.Error(err, "failed to update headless Service",
@@ -638,9 +637,8 @@ func (r *ThanosReceiveHashringReconciler) headlessServiceForReceiveIngest(
 			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
-			ClusterIP: corev1.ClusterIPNone,
-			Selector:  labels,
-			Ports:     getServicePorts(),
+			Selector: labels,
+			Ports:    getReceiveIngestServicePorts(),
 		},
 	}
 
@@ -912,7 +910,7 @@ func argsForReceiveIngestSts(rh *monitoringthanosiov1alpha1.ThanosReceiveHashrin
 	}
 }
 
-func getServicePorts() []corev1.ServicePort {
+func getReceiveIngestServicePorts() []corev1.ServicePort {
 	return []corev1.ServicePort{
 		{
 			Name:       DefaultReceiveIngestGRPCPortName,

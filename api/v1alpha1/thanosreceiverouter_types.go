@@ -34,8 +34,8 @@ type ThanosReceiveRouterSpec struct {
 
 // ThanosReceiveRouterStatus defines the observed state of ThanosReceiveRouter
 type ThanosReceiveRouterStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Conditions represent the latest available observations of the state of the hashring.
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }
 
 //+kubebuilder:object:root=true
@@ -57,6 +57,11 @@ type ThanosReceiveRouterList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ThanosReceiveRouter `json:"items"`
+}
+
+// GetServiceName returns the name of the ThanosReceiveRouter Service.
+func (thr *ThanosReceiveRouter) GetServiceName() string {
+	return thr.GetName()
 }
 
 func init() {
