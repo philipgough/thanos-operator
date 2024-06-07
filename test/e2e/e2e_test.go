@@ -17,19 +17,41 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/thanos-community/thanos-operator/api/v1alpha1"
 	"github.com/thanos-community/thanos-operator/test/utils"
+
+	appsv1 "k8s.io/api/apps/v1"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
-const namespace = "thanos-operator-system"
+const (
+	namespace = "thanos-operator-system"
+
+	objStoreSecret    = "thanos-object-storage"
+	objStoreSecretKey = "thanos.yaml"
+
+	receiveName  = "example-receive"
+	hashringName = "default"
+)
 
 var _ = Describe("controller", Ordered, func() {
+	var c client.Client
+
 	BeforeAll(func() {
 		By("installing prometheus operator")
 		Expect(utils.InstallPrometheusOperator()).To(Succeed())
@@ -40,6 +62,27 @@ var _ = Describe("controller", Ordered, func() {
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
 		_, _ = utils.Run(cmd)
+
+		By("install MinIO")
+		Expect(utils.InstallMinIO()).To(Succeed())
+
+		By("create secret")
+		Expect(utils.CreateMinioObjectStorageSecret()).To(Succeed())
+
+		scheme := runtime.NewScheme()
+		if err := v1alpha1.AddToScheme(scheme); err != nil {
+			fmt.Println("failed to add scheme")
+			os.Exit(1)
+		}
+
+		cl, err := client.New(config.GetConfigOrDie(), client.Options{
+			Scheme: scheme,
+		})
+		if err != nil {
+			fmt.Println("failed to create client")
+			os.Exit(1)
+		}
+		c = cl
 	})
 
 	AfterAll(func() {
@@ -48,6 +91,9 @@ var _ = Describe("controller", Ordered, func() {
 
 		By("uninstalling the cert-manager bundle")
 		utils.UninstallCertManager()
+
+		By("uninstalling MinIO")
+		utils.UninstallMinIO()
 
 		By("removing manager namespace")
 		cmd := exec.Command("kubectl", "delete", "ns", namespace)
@@ -119,4 +165,105 @@ var _ = Describe("controller", Ordered, func() {
 
 		})
 	})
+
+	Context("Thanos Receive", func() {
+		It("should bring up the ingest components", func() {
+			cr := &v1alpha1.ThanosReceive{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      receiveName,
+					Namespace: namespace,
+				},
+				Spec: v1alpha1.ThanosReceiveSpec{
+					CommonThanosFields: v1alpha1.CommonThanosFields{},
+					Router: v1alpha1.RouterSpec{
+						Replicas: ptr.To(int32(3)),
+					},
+					Ingestor: v1alpha1.IngestorSpec{
+						ObjectStorageConfig: &v1alpha1.ObjectStorageConfig{
+							LocalObjectReference: v1.LocalObjectReference{
+								Name: objStoreSecret,
+							},
+							Key: objStoreSecretKey,
+						},
+						Hashrings: map[v1alpha1.Hashring]v1alpha1.IngestorHashringSpec{
+							hashringName: {
+								Replicas:    ptr.To(int32(3)),
+								StorageSize: ptr.To("100Mi"),
+							},
+						},
+					},
+				},
+			}
+			err := c.Create(context.Background(), cr, &client.CreateOptions{})
+			Expect(err).To(BeNil())
+			EventuallyWithOffset(1, verifyStsReplicasRunning(c, 3, receiveName), time.Minute*5, time.Second*10).Should(Succeed())
+		})
+
+		It("should create a ConfigMap with the correct hashring configuration", func() {
+			verifyHashringContents := func() error {
+				cm := &v1.ConfigMap{}
+				err := c.Get(context.Background(), client.ObjectKey{
+					Namespace: namespace,
+					Name:      fmt.Sprintf("%s-%s", receiveName, hashringName),
+				}, cm)
+				if err != nil {
+					return err
+				}
+				if cm.Data["hashrings.json"] == "" {
+					return fmt.Errorf("hashring config is empty")
+				}
+				return nil
+			}
+
+			EventuallyWithOffset(1, verifyHashringContents, time.Minute*1, time.Second*10).Should(Succeed())
+		})
+
+		It("should bring up the router component", func() {
+			EventuallyWithOffset(1, verifyDeploymentReplicasRunning(c, 3, receiveName), time.Minute*1, time.Second*10).Should(Succeed())
+		})
+
+		It("should accept metrics over remote write", func() {
+			EventuallyWithOffset(1, verifyDeploymentReplicasRunning(c, 3, receiveName), time.Minute*1, time.Second*10).Should(Succeed())
+		})
+
+		It("should allow metrics query over http", func() {
+			EventuallyWithOffset(1, verifyDeploymentReplicasRunning(c, 3, receiveName), time.Minute*1, time.Second*10).Should(Succeed())
+		})
+	})
 })
+
+func verifyStsReplicasRunning(c client.Client, expect int, name string) error {
+	sts := &appsv1.StatefulSet{}
+	err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: namespace,
+		Name:      name,
+	}, sts)
+	if err != nil {
+		return err
+	}
+	if *sts.Spec.Replicas != int32(expect) {
+		return fmt.Errorf("expect %d replicas, but got %d", expect, *sts.Spec.Replicas)
+	}
+	if sts.Status.ReadyReplicas != int32(expect) {
+		return fmt.Errorf("expect %d ready replicas, but got %d", expect, sts.Status.ReadyReplicas)
+	}
+	return nil
+}
+
+func verifyDeploymentReplicasRunning(c client.Client, expect int, name string) error {
+	dep := &appsv1.Deployment{}
+	err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: namespace,
+		Name:      name,
+	}, dep)
+	if err != nil {
+		return err
+	}
+	if *dep.Spec.Replicas != int32(expect) {
+		return fmt.Errorf("expect %d replicas, but got %d", expect, *dep.Spec.Replicas)
+	}
+	if dep.Status.ReadyReplicas != int32(expect) {
+		return fmt.Errorf("expect %d ready replicas, but got %d", expect, dep.Status.ReadyReplicas)
+	}
+	return nil
+}

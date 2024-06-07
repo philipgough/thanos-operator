@@ -17,7 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -50,55 +51,56 @@ type RouterSpec struct {
 	// +kubebuilder:validation:Required
 	Replicas *int32 `json:"replicas,omitempty"`
 	// ReplicationFactor is the replication factor for the router.
-	// +kubebuilder:validation:Default=1
+	// +kubebuilder:default=1
 	// +kubebuilder:validation:Enum=1;3;5
 	// +kubebuilder:validation:Required
 	ReplicationFactor *int32 `json:"replicationFactor,omitempty"`
 }
 
+// Hashring is the name of a hashring.
+// Hashring will be used to generate the names for the resources created for the hashring.
+// By default, Hashring will be appended to ThanosReceive name as a suffix separated by a hyphen.
+// In cases where that string value does not match the pattern below, i.e. the name is not a valid DNS-1123 subdomain,
+// the Hashring will be used as is and must be unique within the namespace to avoid conflicts.
+// This field is immutable.
+// +kubebuilder:validation:Required
+// +kubebuilder:validation:MinLength=1
+// +kubebuilder:validation:MaxLength=253
+// +kubebuilder:validation:Pattern=`^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="Hashring is immutable"
+type Hashring string
+
 // IngestorSpec represents the configuration for the ingestor
 type IngestorSpec struct {
-	// ObjectStorageConfig is the secret's key that contains the object storage configuration.
-	// The secret needs to be in the same namespace as the ReceiveHashring object.
-	// Can be overridden by the ObjectStorageConfig in the IngestorHashringSpec.
+	// ObjectStorageConfig is the secret that contains the object storage configuration for the ingest components.
+	// Can be overridden by the ObjectStorageConfig in the IngestorHashringSpec per hashring.
 	// +kubebuilder:validation:Optional
-	ObjectStorageConfig corev1.SecretKeySelector `json:"objectStorageConfig"`
+	ObjectStorageConfig *ObjectStorageConfig `json:"objectStorageConfig,omitempty"`
 	// Hashrings is a list of hashrings to route to.
-	Hashrings []IngestorHashringSpec `json:"hashrings,omitempty"`
+	Hashrings map[Hashring]IngestorHashringSpec `json:"hashrings,omitempty"`
 }
 
 // IngestorHashringSpec represents the configuration for a hashring to be used by the Thanos Receive StatefulSet.
 type IngestorHashringSpec struct {
-	// Name is the name of the hashring.
-	// Name will be used to generate the names for the resources created for the hashring.
-	// By default, Name will be used as a prefix with the ThanosReceive name as a suffix separated by a hyphen.
-	// In cases where that name does not match the pattern below, i.e. the name is not a valid DNS-1123 subdomain,
-	// the Name will be used as is and must be unique within the namespace.
-	// This field is immutable.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="Value is immutable"
-	Name string `json:"name,omitempty"`
 	// Labels are additional labels to add to the hashring components.
 	// Labels set here will overwrite the labels inherited from the ThanosReceive object if they have the same key.
 	// +kubebuilder:validation:Optional
 	Labels map[string]string `json:"labels,omitempty"`
 	// Replicas is the number of replicas/members of the hashring to add to the Thanos Receive StatefulSet.
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
 	// +kubebuilder:validation:Required
 	Replicas *int32 `json:"replicas,omitempty"`
 	// Retention is the duration for which the Thanos Receive StatefulSet will retain data.
 	// +kubebuilder:default="2h"
 	// +kubebuilder:validation:Required
 	Retention Duration `json:"retention,omitempty"`
-	// ObjectStorageConfig is the secret's key that contains the object storage configuration.
-	// The secret needs to be in the same namespace as the ReceiveHashring object.
+	// ObjectStorageConfig is the secret that contains the object storage configuration for the hashring.
 	// +kubebuilder:validation:Optional
-	ObjectStorageConfig corev1.SecretKeySelector `json:"objectStorageConfig"`
+	ObjectStorageConfig *ObjectStorageConfig `json:"objectStorageConfig,omitempty"`
 	// StorageSize is the size of the storage to be used by the Thanos Receive StatefulSet.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$`
 	StorageSize *string `json:"storageSize,omitempty"`
 	// Tenants is a list of tenants that should be matched by the hashring.
 	// An empty list matches all tenants.
@@ -135,7 +137,9 @@ type ThanosReceive struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ThanosReceiveSpec   `json:"spec,omitempty"`
+	// Spec defines the desired state of ThanosReceive
+	Spec ThanosReceiveSpec `json:"spec,omitempty"`
+	// Status defines the observed state of ThanosReceive
 	Status ThanosReceiveStatus `json:"status,omitempty"`
 }
 
@@ -150,4 +154,25 @@ type ThanosReceiveList struct {
 
 func init() {
 	SchemeBuilder.Register(&ThanosReceive{}, &ThanosReceiveList{})
+}
+
+// Validate validates the ThanosReceiveSpec fields.
+func (i *IngestorSpec) Validate(againstReplicationFactor *int32) error {
+	if i.ObjectStorageConfig == nil {
+		for key, hashring := range i.Hashrings {
+			if hashring.ObjectStorageConfig == nil {
+				return fmt.Errorf("ObjectStorageConfig is required for IngestorHashringSpec %s", key)
+			}
+		}
+	}
+	for key, hashring := range i.Hashrings {
+		if hashring.StorageSize == nil {
+			return fmt.Errorf("StorageSize is required for IngestorHashringSpec %s", key)
+		}
+
+		if *hashring.Replicas < *againstReplicationFactor {
+			return fmt.Errorf("replicas for IngestorHashringSpec %s must be greater than or equal to the ReplicationFactor", key)
+		}
+	}
+	return nil
 }

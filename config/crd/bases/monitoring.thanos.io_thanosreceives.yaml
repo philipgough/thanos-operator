@@ -37,7 +37,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: ThanosReceiveSpec defines the desired state of ThanosReceive
+            description: Spec defines the desired state of ThanosReceive
             properties:
               image:
                 description: Container image to use for the Thanos components.
@@ -75,8 +75,7 @@ spec:
                 description: Ingestor is the configuration for the ingestor.
                 properties:
                   hashrings:
-                    description: Hashrings is a list of hashrings to route to.
-                    items:
+                    additionalProperties:
                       description: IngestorHashringSpec represents the configuration
                         for a hashring to be used by the Thanos Receive StatefulSet.
                       properties:
@@ -87,25 +86,9 @@ spec:
                             Labels are additional labels to add to the hashring components.
                             Labels set here will overwrite the labels inherited from the ThanosReceive object if they have the same key.
                           type: object
-                        name:
-                          description: |-
-                            Name is the name of the hashring.
-                            Name will be used to generate the names for the resources created for the hashring.
-                            By default, Name will be used as a prefix with the ThanosReceive name as a suffix separated by a hyphen.
-                            In cases where that name does not match the pattern below, i.e. the name is not a valid DNS-1123 subdomain,
-                            the Name will be used as is and must be unique within the namespace.
-                            This field is immutable.
-                          maxLength: 253
-                          minLength: 1
-                          pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                          type: string
-                          x-kubernetes-validations:
-                          - message: Value is immutable
-                            rule: self == oldSelf
                         objectStorageConfig:
-                          description: |-
-                            ObjectStorageConfig is the secret's key that contains the object storage configuration.
-                            The secret needs to be in the same namespace as the ReceiveHashring object.
+                          description: ObjectStorageConfig is the secret that contains
+                            the object storage configuration for the hashring.
                           properties:
                             key:
                               description: The key of the secret to select from.  Must
@@ -126,6 +109,7 @@ spec:
                           type: object
                           x-kubernetes-map-type: atomic
                         replicas:
+                          default: 1
                           description: Replicas is the number of replicas/members
                             of the hashring to add to the Thanos Receive StatefulSet.
                           format: int32
@@ -140,6 +124,7 @@ spec:
                         storageSize:
                           description: StorageSize is the size of the storage to be
                             used by the Thanos Receive StatefulSet.
+                          pattern: ^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$
                           type: string
                         tenantMatcherType:
                           default: exact
@@ -157,12 +142,12 @@ spec:
                             type: string
                           type: array
                       type: object
-                    type: array
+                    description: Hashrings is a list of hashrings to route to.
+                    type: object
                   objectStorageConfig:
                     description: |-
-                      ObjectStorageConfig is the secret's key that contains the object storage configuration.
-                      The secret needs to be in the same namespace as the ReceiveHashring object.
-                      Can be overridden by the ObjectStorageConfig in the IngestorHashringSpec.
+                      ObjectStorageConfig is the secret that contains the object storage configuration for the ingest components.
+                      Can be overridden by the ObjectStorageConfig in the IngestorHashringSpec per hashring.
                     properties:
                       key:
                         description: The key of the secret to select from.  Must be
@@ -220,6 +205,7 @@ spec:
                     minimum: 1
                     type: integer
                   replicationFactor:
+                    default: 1
                     description: ReplicationFactor is the replication factor for the
                       router.
                     enum:
@@ -233,12 +219,11 @@ spec:
                 description: |-
                   Version of Thanos to be deployed.
                   If not specified, the operator assumes the latest upstream version of
-                  Thanos available at the time when the version of the operator was
-                  released.
+                  Thanos available at the time when the version of the operator was released.
                 type: string
             type: object
           status:
-            description: ThanosReceiveStatus defines the observed state of ThanosReceive
+            description: Status defines the observed state of ThanosReceive
             properties:
               conditions:
                 description: Conditions represent the latest available observations
