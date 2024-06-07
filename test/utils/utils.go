@@ -41,7 +41,7 @@ func warnError(err error) {
 // InstallPrometheusOperator installs the prometheus Operator to be used to export the enabled metrics.
 func InstallPrometheusOperator() error {
 	url := fmt.Sprintf(prometheusOperatorURL, prometheusOperatorVersion)
-	cmd := exec.Command("kubectl", "create", "-f", url)
+	cmd := exec.Command("kubectl", "apply", "--server-side", "-f", url)
 	_, err := Run(cmd)
 	return err
 }
@@ -103,7 +103,7 @@ func InstallCertManager() error {
 	return err
 }
 
-// LoadImageToKindCluster loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName  loads a local docker image to the kind cluster
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := "kind"
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
@@ -137,4 +137,32 @@ func GetProjectDir() (string, error) {
 	}
 	wd = strings.Replace(wd, "/test/e2e", "", -1)
 	return wd, nil
+}
+
+// InstallMinIO installs the object store
+func InstallMinIO() error {
+	cmd := exec.Command("kubectl", "apply", "-f", minioTestData())
+	_, err := Run(cmd)
+	return err
+}
+
+// UninstallMinIO uninstalls the object store
+func UninstallMinIO() {
+	cmd := exec.Command("kubectl", "delete", "-f", minioTestData())
+	if _, err := Run(cmd); err != nil {
+		warnError(err)
+	}
+}
+
+func CreateMinioObjectStorageSecret() error {
+	wd, _ := os.Getwd()
+	path := wd + "/test/utils/testdata/minio-secret.yaml"
+	cmd := exec.Command("kubectl", "apply", "-f", path)
+	_, err := Run(cmd)
+	return err
+}
+
+func minioTestData() string {
+	wd, _ := os.Getwd()
+	return wd + "/test/utils/testdata/minio.yaml"
 }
