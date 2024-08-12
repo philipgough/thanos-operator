@@ -1,0 +1,461 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: thanosgateways.monitoring.thanos.io
+spec:
+  group: monitoring.thanos.io
+  names:
+    kind: ThanosGateway
+    listKind: ThanosGatewayList
+    plural: thanosgateways
+    singular: thanosgateway
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ThanosGateway is the Schema for the thanosgateways API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ThanosGatewaySpec defines the desired state of ThanosGateway
+            properties:
+              authProvidersConfig:
+                description: AuthProvidersConfig is the authentication providers configuration.
+                properties:
+                  jwtProviders:
+                    description: JWTProviders is the list of JWT providers.
+                    items:
+                      description: |-
+                        JWTProviderConfig defines the JWT provider configuration.
+                        JWT will be validated against the JWT provider.
+                        JWT is extracted from the Authorization header and is expected to be in the form of Bearer token.
+                      properties:
+                        audiences:
+                          description: |-
+                            Audiences of the JWT provider.
+                            A list of JWT audiences allowed to access.
+                            A JWT containing any of these audiences will be accepted.
+                            If not specified, the audiences in JWT will not be checked.
+                          items:
+                            type: string
+                          type: array
+                        issuer:
+                          description: Issuer is the principal that issues the JWT.
+                          type: string
+                        localJWKS:
+                          description: |-
+                            LocalJWKS is the local JWKs.
+                            If provided, it is preferred over RemoteJWKsURI.
+                          properties:
+                            key:
+                              description: The key to select.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                TODO: Add other useful fields. apiVersion, kind, uid?
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                TODO: Drop `kubebuilder:default` when controller-gen doesn't need it https://github.com/kubernetes-sigs/kubebuilder/issues/3896.
+                              type: string
+                            optional:
+                              description: Specify whether the ConfigMap or its key
+                                must be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        name:
+                          description: Name of the JWT provider.
+                          minLength: 1
+                          type: string
+                        remoteJWKsURI:
+                          description: RemoteJWKsURI is the URL of the JWKs endpoint.
+                          type: string
+                      required:
+                      - issuer
+                      - name
+                      type: object
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  mTLSConfigs:
+                    description: MTLSConfig is the mTLS configuration.
+                    items:
+                      description: MTLSConfig defines the mTLS configuration.
+                      properties:
+                        name:
+                          description: Name of the JWT provider.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                type: object
+              backendConfig:
+                description: BackendConfig is the configuration for the metrics backend.
+                properties:
+                  metricsReadConfig:
+                    description: MetricsReadConfig is the configuration for the metrics
+                      read backend.
+                    properties:
+                      fqdn:
+                        description: FQDN is the FQDN of the backend.
+                        type: string
+                      labelSelector:
+                        description: DiscoveryConfig is the label selector to discover
+                          the resource.
+                        properties:
+                          matchExpressions:
+                            description: matchExpressions is a list of label selector
+                              requirements. The requirements are ANDed.
+                            items:
+                              description: |-
+                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                relates the key and values.
+                              properties:
+                                key:
+                                  description: key is the label key that the selector
+                                    applies to.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    operator represents a key's relationship to a set of values.
+                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                  type: string
+                                values:
+                                  description: |-
+                                    values is an array of string values. If the operator is In or NotIn,
+                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                    the values array must be empty. This array is replaced during a strategic
+                                    merge patch.
+                                  items:
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                              required:
+                              - key
+                              - operator
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          matchLabels:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                            type: object
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                  metricsWriteConfig:
+                    description: MetricsWriteConfig is the configuration for the metrics
+                      write backend.
+                    properties:
+                      fqdn:
+                        description: FQDN is the FQDN of the backend.
+                        type: string
+                      labelSelector:
+                        description: DiscoveryConfig is the label selector to discover
+                          the resource.
+                        properties:
+                          matchExpressions:
+                            description: matchExpressions is a list of label selector
+                              requirements. The requirements are ANDed.
+                            items:
+                              description: |-
+                                A label selector requirement is a selector that contains values, a key, and an operator that
+                                relates the key and values.
+                              properties:
+                                key:
+                                  description: key is the label key that the selector
+                                    applies to.
+                                  type: string
+                                operator:
+                                  description: |-
+                                    operator represents a key's relationship to a set of values.
+                                    Valid operators are In, NotIn, Exists and DoesNotExist.
+                                  type: string
+                                values:
+                                  description: |-
+                                    values is an array of string values. If the operator is In or NotIn,
+                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                    the values array must be empty. This array is replaced during a strategic
+                                    merge patch.
+                                  items:
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                              required:
+                              - key
+                              - operator
+                              type: object
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          matchLabels:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                              map is equivalent to an element of matchExpressions, whose key field is "key", the
+                              operator is "In", and the values array contains only "value". The requirements are ANDed.
+                            type: object
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                required:
+                - metricsReadConfig
+                - metricsWriteConfig
+                type: object
+              gatewayConfig:
+                description: GatewayConfig is the gateway configuration.
+                properties:
+                  tenantIdentifierConfig:
+                    description: TenantIdentifierConfig is the tenant identifier configuration.
+                    properties:
+                      headerIdentifierConfig:
+                        description: |-
+                          HeaderIdentifierConfig is the header identifier configuration.
+                          This is the default configuration.
+                        properties:
+                          externalHeader:
+                            default: X-THANOS-TENANT
+                            description: ExternalHeaderValue is the header to use
+                              to identify the tenant.
+                            type: string
+                          internalHeader:
+                            default: X-THANOS-TENANT
+                            description: InternalHeaderValue is the header to use
+                              to identify the tenant internally.
+                            type: string
+                        type: object
+                    type: object
+                type: object
+              tenants:
+                description: Tenants is the list of tenants.
+                items:
+                  description: Tenant defines the tenants configuration.
+                  properties:
+                    metricsReadConfig:
+                      description: MetricsReadConfig is the auth config for the metrics
+                        read backend.
+                      properties:
+                        certAuthConfig:
+                          additionalProperties:
+                            items:
+                              description: CertRBAC defines the cert RBAC configuration.
+                              properties:
+                                matcher:
+                                  description: |-
+                                    Matcher is the matcher to use to match the principal.
+                                    In the case of a client certificate, the principal is set in the following precedence order:
+                                    1. URI SAN
+                                    2. DNS SAN
+                                    3. The subject. The Common Name (CN) of the certificate.
+                                  properties:
+                                    isRegex:
+                                      default: false
+                                      description: IsRegex is true if the Value is
+                                        a regular expression.
+                                      type: boolean
+                                    value:
+                                      description: Value is the value to match.
+                                      type: string
+                                  required:
+                                  - value
+                                  type: object
+                              required:
+                              - matcher
+                              type: object
+                            type: array
+                          description: |-
+                            CertAutConfig is a map of named MTLSConfig that are used to authenticate access to a resource.
+                            The value is a list of CertRBAC which authorizes the principal.
+                            Authorization is granted if any of the CertRBAC matches.
+                          maxProperties: 5
+                          type: object
+                        tokenAuthConfig:
+                          additionalProperties:
+                            items:
+                              description: TokenRBAC defines the token RBAC configuration.
+                              properties:
+                                matcher:
+                                  description: Matcher is the matcher to use to match
+                                    the principal.
+                                  properties:
+                                    isRegex:
+                                      default: false
+                                      description: IsRegex is true if the Value is
+                                        a regular expression.
+                                      type: boolean
+                                    value:
+                                      description: Value is the value to match.
+                                      type: string
+                                  required:
+                                  - value
+                                  type: object
+                                principal:
+                                  default: sub
+                                  description: |-
+                                    Principal is the path on the token to identify the principal.
+                                    This should be provided as a JSON path seperated by dots.
+                                  type: string
+                              required:
+                              - matcher
+                              type: object
+                            type: array
+                          description: |-
+                            TokenAuthConfig is a map of named JWTProviderConfig that are used to authenticate access to a resource.
+                            The value is a list of TokenRBAC which authorizes the principal.
+                            Authorization is granted if any of the TokenRBAC matches.
+                          maxProperties: 5
+                          type: object
+                      type: object
+                    metricsWriteConfig:
+                      description: MetricsWriteConfig is the auth config for the metrics
+                        write backend.
+                      properties:
+                        certAuthConfig:
+                          additionalProperties:
+                            items:
+                              description: CertRBAC defines the cert RBAC configuration.
+                              properties:
+                                matcher:
+                                  description: |-
+                                    Matcher is the matcher to use to match the principal.
+                                    In the case of a client certificate, the principal is set in the following precedence order:
+                                    1. URI SAN
+                                    2. DNS SAN
+                                    3. The subject. The Common Name (CN) of the certificate.
+                                  properties:
+                                    isRegex:
+                                      default: false
+                                      description: IsRegex is true if the Value is
+                                        a regular expression.
+                                      type: boolean
+                                    value:
+                                      description: Value is the value to match.
+                                      type: string
+                                  required:
+                                  - value
+                                  type: object
+                              required:
+                              - matcher
+                              type: object
+                            type: array
+                          description: |-
+                            CertAutConfig is a map of named MTLSConfig that are used to authenticate access to a resource.
+                            The value is a list of CertRBAC which authorizes the principal.
+                            Authorization is granted if any of the CertRBAC matches.
+                          maxProperties: 5
+                          type: object
+                        tokenAuthConfig:
+                          additionalProperties:
+                            items:
+                              description: TokenRBAC defines the token RBAC configuration.
+                              properties:
+                                matcher:
+                                  description: Matcher is the matcher to use to match
+                                    the principal.
+                                  properties:
+                                    isRegex:
+                                      default: false
+                                      description: IsRegex is true if the Value is
+                                        a regular expression.
+                                      type: boolean
+                                    value:
+                                      description: Value is the value to match.
+                                      type: string
+                                  required:
+                                  - value
+                                  type: object
+                                principal:
+                                  default: sub
+                                  description: |-
+                                    Principal is the path on the token to identify the principal.
+                                    This should be provided as a JSON path seperated by dots.
+                                  type: string
+                              required:
+                              - matcher
+                              type: object
+                            type: array
+                          description: |-
+                            TokenAuthConfig is a map of named JWTProviderConfig that are used to authenticate access to a resource.
+                            The value is a list of TokenRBAC which authorizes the principal.
+                            Authorization is granted if any of the TokenRBAC matches.
+                          maxProperties: 5
+                          type: object
+                      type: object
+                    name:
+                      description: Name of the tenant.
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+            required:
+            - backendConfig
+            type: object
+            x-kubernetes-validations:
+            - message: jwt provider must exist for read
+              rule: self.tenants.all(tenant, tenant.metricsReadConfig.tokenAuthConfig.all(name,
+                self.authProvidersConfig.jwtProviders.exists(provider, provider.name
+                == name)))
+            - message: cert provider must exist for read
+              rule: self.tenants.all(tenant, tenant.metricsReadConfig.certAuthConfig.all(name,
+                self.authProvidersConfig.mTLSConfigs.exists(provider, provider.name
+                == name)))
+            - message: jwt provider must exist for write
+              rule: self.tenants.all(tenant, tenant.metricsWriteConfig.tokenAuthConfig.all(name,
+                self.authProvidersConfig.jwtProviders.exists(provider, provider.name
+                == name)))
+            - message: cert provider must exist for write
+              rule: self.tenants.all(tenant, tenant.metricsWriteConfig.certAuthConfig.all(name,
+                self.authProvidersConfig.mTLSConfigs.exists(provider, provider.name
+                == name)))
+          status:
+            description: ThanosGatewayStatus defines the observed state of ThanosGateway
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

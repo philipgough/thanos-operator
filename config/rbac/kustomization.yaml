@@ -20,6 +20,8 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the Project itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- thanosgateway_editor_role.yaml
+- thanosgateway_viewer_role.yaml
 - thanoscompact_editor_role.yaml
 - thanoscompact_viewer_role.yaml
 - thanosreceive_editor_role.yaml

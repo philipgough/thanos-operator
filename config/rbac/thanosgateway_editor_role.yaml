@@ -1,0 +1,27 @@
+# permissions for end users to edit thanosgateways.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: thanos-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: thanosgateway-editor-role
+rules:
+- apiGroups:
+  - monitoring.thanos.io
+  resources:
+  - thanosgateways
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - monitoring.thanos.io
+  resources:
+  - thanosgateways/status
+  verbs:
+  - get
