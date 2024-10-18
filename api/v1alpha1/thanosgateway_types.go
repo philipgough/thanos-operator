@@ -22,11 +22,24 @@ import (
 
 // ThanosGatewaySpec defines the desired state of ThanosGateway
 type ThanosGatewaySpec struct {
-	Foo string `json:"foo,omitempty"`
+	// Replicas is the number of proxy replicas.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Required
+	Replicas int32 `json:"replicas,omitempty"`
+	// LogLevel is the log level for the server.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=info
+	LogLevel string `json:"log_level"`
+	// HeaderManipulations defines the configuration for header manipulation.
+	// Header manipulations happens at a global level and applies to all requests.
+	// +kubebuilder:validation:Optional
+	HeaderManipulations []HeaderManipulation `json:"headerManipulations,omitempty"`
 }
 
 // HeaderManipulation defines the configuration for header manipulation.
-// It allows to copy the value of one header to another.
+// It enables copying of a header value at request time to another header.
+// This process runs before the request is sent to the backend and is matched against any requirements
 type HeaderManipulation struct {
 	// FromHeader is the header to copy the value from.
 	// +kubebuilder:validation:Required
@@ -34,7 +47,6 @@ type HeaderManipulation struct {
 	// ToHeader is the header to copy the value to.
 	// +kubebuilder:validation:Required
 	ToHeader string `json:"toHeader"`
-	// todo add add remove headers here too
 }
 
 // BackendConfig defines the configuration for the backend.

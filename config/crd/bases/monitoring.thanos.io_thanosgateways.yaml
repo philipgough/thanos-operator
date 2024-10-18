@@ -39,10 +39,39 @@ spec:
           spec:
             description: ThanosGatewaySpec defines the desired state of ThanosGateway
             properties:
-              foo:
-                description: Foo is an example field of ThanosGateway. Edit thanosgateway_types.go
-                  to remove/update
+              headerManipulations:
+                description: |-
+                  HeaderManipulations defines the configuration for header manipulation.
+                  Header manipulations happens at a global level and applies to all requests.
+                items:
+                  description: |-
+                    HeaderManipulation defines the configuration for header manipulation.
+                    It enables copying of a header value at request time to another header.
+                    This process runs before the request is sent to the backend and is matched against any requirements
+                  properties:
+                    fromHeader:
+                      description: FromHeader is the header to copy the value from.
+                      type: string
+                    toHeader:
+                      description: ToHeader is the header to copy the value to.
+                      type: string
+                  required:
+                  - fromHeader
+                  - toHeader
+                  type: object
+                type: array
+              log_level:
+                default: info
+                description: LogLevel is the log level for the server.
                 type: string
+              replicas:
+                default: 1
+                description: Replicas is the number of proxy replicas.
+                format: int32
+                minimum: 1
+                type: integer
+            required:
+            - replicas
             type: object
           status:
             description: ThanosGatewayStatus defines the observed state of ThanosGateway
