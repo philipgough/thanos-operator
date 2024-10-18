@@ -4,6 +4,7 @@ import (
 	"github.com/thanos-community/thanos-operator/api/v1alpha1"
 	"github.com/thanos-community/thanos-operator/internal/pkg/manifests"
 	manifestscompact "github.com/thanos-community/thanos-operator/internal/pkg/manifests/compact"
+	manifestgateway "github.com/thanos-community/thanos-operator/internal/pkg/manifests/gateway"
 	manifestquery "github.com/thanos-community/thanos-operator/internal/pkg/manifests/query"
 	manifestqueryfrontend "github.com/thanos-community/thanos-operator/internal/pkg/manifests/queryfrontend"
 	manifestreceive "github.com/thanos-community/thanos-operator/internal/pkg/manifests/receive"
@@ -190,6 +191,24 @@ func compactV1Alpha1ToOptions(in v1alpha1.ThanosCompact) manifestscompact.Option
 		Downsampling:   downsamplingConfig(),
 		StorageSize:    in.Spec.StorageSize.ToResourceQuantity(),
 		ObjStoreSecret: in.Spec.ObjectStorageConfig.ToSecretKeySelector(),
+	}
+}
+
+func gatewayV1Alpha1ToOptions(in v1alpha1.ThanosGateway) manifestgateway.Options {
+	labels := manifests.MergeLabels(in.GetLabels(), nil)
+	opts := commonToOpts(&in, in.Spec.Replicas, labels, in.GetAnnotations(), v1alpha1.CommonThanosFields{}, v1alpha1.Additional{})
+
+	headerManipulations := make([]manifestgateway.HeaderManipulationConfig, len(in.Spec.HeaderManipulations))
+	for i, hm := range in.Spec.HeaderManipulations {
+		headerManipulations[i] = manifestgateway.HeaderManipulationConfig{
+			ExternalHeader: hm.FromHeader,
+			InternalHeader: hm.ToHeader,
+		}
+	}
+
+	return manifestgateway.Options{
+		Options:             opts,
+		HeaderManipulations: headerManipulations,
 	}
 }
 
