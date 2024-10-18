@@ -41,29 +41,99 @@ spec:
             properties:
               headerManipulations:
                 description: |-
-                  HeaderManipulations defines the configuration for header manipulation.
+                  HeaderManipulation defines the configuration for header manipulation.
                   Header manipulations happens at a global level and applies to all requests.
-                items:
-                  description: |-
-                    HeaderManipulation defines the configuration for header manipulation.
-                    It enables copying of a header value at request time to another header.
-                    This process runs before the request is sent to the backend and is matched against any requirements
-                  properties:
-                    fromHeader:
-                      description: FromHeader is the header to copy the value from.
-                      type: string
-                    toHeader:
-                      description: ToHeader is the header to copy the value to.
-                      type: string
-                  required:
-                  - fromHeader
-                  - toHeader
-                  type: object
-                type: array
+                properties:
+                  fromHeader:
+                    description: FromHeader is the header to copy the value from.
+                    type: string
+                  toHeader:
+                    description: ToHeader is the header to copy the value to.
+                    type: string
+                required:
+                - fromHeader
+                - toHeader
+                type: object
               log_level:
                 default: info
                 description: LogLevel is the log level for the server.
                 type: string
+              metricsReadSpec:
+                description: MetricsReadSpec defines the configuration for reading
+                  metrics.
+                properties:
+                  backendConfig:
+                    description: BackendConfig defines the configuration for the backend.
+                    properties:
+                      address:
+                        description: Address is the address of the backend.
+                        type: string
+                      port:
+                        description: Port is the port of the backend.
+                        format: int32
+                        type: integer
+                    required:
+                    - address
+                    - port
+                    type: object
+                  headerModification:
+                    description: HeaderModification defines the configuration for
+                      header modification.
+                    properties:
+                      addHeaders:
+                        additionalProperties:
+                          type: string
+                        description: AddHeaders is a list of headers to add to the
+                          request.
+                        type: object
+                      removeHeaders:
+                        description: RemoveHeaders is a list of headers to remove
+                          from the request.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                required:
+                - backendConfig
+                type: object
+              metricsWriteSpec:
+                description: MetricsWriteSpec defines the configuration for writing
+                  metrics.
+                properties:
+                  backendConfig:
+                    description: BackendConfig defines the configuration for the backend.
+                    properties:
+                      address:
+                        description: Address is the address of the backend.
+                        type: string
+                      port:
+                        description: Port is the port of the backend.
+                        format: int32
+                        type: integer
+                    required:
+                    - address
+                    - port
+                    type: object
+                  headerModification:
+                    description: HeaderModification defines the configuration for
+                      header modification.
+                    properties:
+                      addHeaders:
+                        additionalProperties:
+                          type: string
+                        description: AddHeaders is a list of headers to add to the
+                          request.
+                        type: object
+                      removeHeaders:
+                        description: RemoveHeaders is a list of headers to remove
+                          from the request.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                required:
+                - backendConfig
+                type: object
               replicas:
                 default: 1
                 description: Replicas is the number of proxy replicas.
@@ -71,6 +141,8 @@ spec:
                 minimum: 1
                 type: integer
             required:
+            - metricsReadSpec
+            - metricsWriteSpec
             - replicas
             type: object
           status:

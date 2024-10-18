@@ -31,10 +31,16 @@ type ThanosGatewaySpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=info
 	LogLevel string `json:"log_level"`
-	// HeaderManipulations defines the configuration for header manipulation.
+	// HeaderManipulation defines the configuration for header manipulation.
 	// Header manipulations happens at a global level and applies to all requests.
 	// +kubebuilder:validation:Optional
-	HeaderManipulations []HeaderManipulation `json:"headerManipulations,omitempty"`
+	HeaderManipulation *HeaderManipulation `json:"headerManipulations,omitempty"`
+	// MetricsReadSpec defines the configuration for reading metrics.
+	// +kubebuilder:validation:Required
+	MetricsReadSpec MetricsReadSpec `json:"metricsReadSpec"`
+	// MetricsWriteSpec defines the configuration for writing metrics.
+	// +kubebuilder:validation:Required
+	MetricsWriteSpec MetricsWriteSpec `json:"metricsWriteSpec"`
 }
 
 // HeaderManipulation defines the configuration for header manipulation.
@@ -47,6 +53,18 @@ type HeaderManipulation struct {
 	// ToHeader is the header to copy the value to.
 	// +kubebuilder:validation:Required
 	ToHeader string `json:"toHeader"`
+}
+
+// HeaderModification defines the configuration for header modification.
+// This allows adding and removing headers from the request.
+// This process runs before the request is sent to the backend after a route is matched.
+type HeaderModification struct {
+	// AddHeaders is a list of headers to add to the request.
+	// +kubebuilder:validation:Optional
+	AddHeaders map[string]string `json:"addHeaders,omitempty"`
+	// RemoveHeaders is a list of headers to remove from the request.
+	// +kubebuilder:validation:Optional
+	RemoveHeaders []string `json:"removeHeaders,omitempty"`
 }
 
 // BackendConfig defines the configuration for the backend.
@@ -64,6 +82,19 @@ type MetricsReadSpec struct {
 	// BackendConfig defines the configuration for the backend.
 	// +kubebuilder:validation:Required
 	BackendConfig BackendConfig `json:"backendConfig"`
+	// HeaderModification defines the configuration for header modification.
+	// +kubebuilder:validation:Optional
+	HeaderModification *HeaderModification `json:"headerModification,omitempty"`
+}
+
+// MetricsWriteSpec defines the configuration for writing metrics.
+type MetricsWriteSpec struct {
+	// BackendConfig defines the configuration for the backend.
+	// +kubebuilder:validation:Required
+	BackendConfig BackendConfig `json:"backendConfig"`
+	// HeaderModification defines the configuration for header modification.
+	// +kubebuilder:validation:Optional
+	HeaderModification *HeaderModification `json:"headerModification,omitempty"`
 }
 
 // ThanosGatewayStatus defines the observed state of ThanosGateway

@@ -198,17 +198,43 @@ func gatewayV1Alpha1ToOptions(in v1alpha1.ThanosGateway) manifestgateway.Options
 	labels := manifests.MergeLabels(in.GetLabels(), nil)
 	opts := commonToOpts(&in, in.Spec.Replicas, labels, in.GetAnnotations(), v1alpha1.CommonThanosFields{}, v1alpha1.Additional{})
 
-	headerManipulations := make([]manifestgateway.HeaderManipulationConfig, len(in.Spec.HeaderManipulations))
-	for i, hm := range in.Spec.HeaderManipulations {
-		headerManipulations[i] = manifestgateway.HeaderManipulationConfig{
-			ExternalHeader: hm.FromHeader,
-			InternalHeader: hm.ToHeader,
+	var hm *manifestgateway.HeaderManipulationConfig
+	if in.Spec.HeaderManipulation != nil {
+		hm = &manifestgateway.HeaderManipulationConfig{
+			ExternalHeader: in.Spec.HeaderManipulation.FromHeader,
+			InternalHeader: in.Spec.HeaderManipulation.ToHeader,
 		}
+	}
+
+	metricsReadOpts := manifestgateway.MetricsReadOptions{
+		BackendConfig: manifestgateway.Backend{
+			Address:         in.Spec.MetricsReadSpec.BackendConfig.Address,
+			Port:            int(in.Spec.MetricsReadSpec.BackendConfig.Port),
+			MatchRouteRegex: "^/api/v1/(query|query_range|series|label|labels|query_exemplars|targets|rules|metadata)$",
+			HeaderModification: manifestgateway.HeaderModification{
+				AddHeaders:    in.Spec.MetricsReadSpec.HeaderModification.AddHeaders,
+				RemoveHeaders: in.Spec.MetricsReadSpec.HeaderModification.RemoveHeaders,
+			},
+		},
+	}
+
+	metricsWriteOpts := manifestgateway.MetricsWriteOptions{
+		BackendConfig: manifestgateway.Backend{
+			Address:         in.Spec.MetricsWriteSpec.BackendConfig.Address,
+			Port:            int(in.Spec.MetricsWriteSpec.BackendConfig.Port),
+			MatchRouteRegex: "/api/v1/receive",
+			HeaderModification: manifestgateway.HeaderModification{
+				AddHeaders:    in.Spec.MetricsWriteSpec.HeaderModification.AddHeaders,
+				RemoveHeaders: in.Spec.MetricsWriteSpec.HeaderModification.RemoveHeaders,
+			},
+		},
 	}
 
 	return manifestgateway.Options{
 		Options:             opts,
-		HeaderManipulations: headerManipulations,
+		HeaderManipulation:  hm,
+		MetricsReadOptions:  metricsReadOpts,
+		MetricsWriteOptions: metricsWriteOpts,
 	}
 }
 

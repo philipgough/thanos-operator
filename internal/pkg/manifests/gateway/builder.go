@@ -2,13 +2,13 @@ package gateway
 
 import (
 	"fmt"
-
 	envoyconfigbootstrapv3 "github.com/envoyproxy/go-control-plane/envoy/config/bootstrap/v3"
 	envoyconfigclusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoyconfigcorev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	luav3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/lua/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	envoyconfigmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	matcher "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
@@ -32,6 +32,14 @@ const (
 	statsPrefix = "ingress_http"
 )
 
+// Options is the configuration for the gateway.
+type Options struct {
+	manifests.Options
+	HeaderManipulation  *HeaderManipulationConfig
+	MetricsReadOptions  MetricsReadOptions
+	MetricsWriteOptions MetricsWriteOptions
+}
+
 // MetricsReadOptions is the configuration for the metrics read backend.
 type MetricsReadOptions struct {
 	BackendConfig Backend
@@ -45,9 +53,17 @@ type MetricsWriteOptions struct {
 // Backend is the configuration for a backend.
 // MatchRouteRegex is the regex to match the route.
 type Backend struct {
-	Address         string
-	Port            int
-	MatchRouteRegex string
+	Address            string
+	Port               int
+	MatchRouteRegex    string
+	HeaderModification HeaderModification
+	HeaderMatcher      *HeaderMatcher
+}
+
+// HeaderModification is the configuration for header modification.
+type HeaderModification struct {
+	AddHeaders    map[string]string
+	RemoveHeaders []string
 }
 
 // HeaderManipulationConfig is the configuration for header manipulation.
@@ -56,17 +72,50 @@ type HeaderManipulationConfig struct {
 	InternalHeader string
 }
 
-// Options is the configuration for the gateway.
-type Options struct {
-	manifests.Options
-	HeaderManipulations []HeaderManipulationConfig
-	MetricsReadOptions  MetricsReadOptions
-	MetricsWriteOptions MetricsWriteOptions
+func (hmc HeaderManipulationConfig) toLuaFilter() *envoyconfigmanagerv3.HttpFilter {
+	lua := luav3.Lua{
+		DefaultSourceCode: &envoyconfigcorev3.DataSource{
+			Specifier: &envoyconfigcorev3.DataSource_InlineString{
+				InlineString: fmt.Sprintf(`
+function envoy_on_request(request_handle)
+	local headers = request_handle:headers()
+	current = headers:get("%s")
+	request_handle:headers():add("%s", current)
+end
+`, hmc.ExternalHeader, hmc.InternalHeader),
+			},
+		},
+	}
+
+	luaPB, err := anypb.New(&lua)
+	if err != nil {
+		panic(err)
+	}
+
+	return &envoyconfigmanagerv3.HttpFilter{
+		Name: "envoy.filters.http.lua",
+		ConfigType: &envoyconfigmanagerv3.HttpFilter_TypedConfig{
+			TypedConfig: &anypb.Any{
+				TypeUrl: "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua",
+				Value:   luaPB.Value,
+			},
+		},
+	}
+}
+
+type HeaderMatcher struct {
+	Name  string
+	Regex string
 }
 
 // BuildRaw returns raw JSON configuration for envoy proxy or panics if it fails.
 func (opts Options) BuildRaw() string {
-	connManager := buildHTTPConnectionManager(opts, "")
+	var httpFilters []*envoyconfigmanagerv3.HttpFilter
+	if opts.HeaderManipulation != nil {
+		httpFilters = append(httpFilters, opts.HeaderManipulation.toLuaFilter())
+	}
+
+	connManager := buildHTTPConnectionManager(opts, httpFilters)
 	pbCM, err := anypb.New(connManager)
 	if err != nil {
 		panic(err)
@@ -119,25 +168,29 @@ func buildClusters(opts Options) []*envoyconfigclusterv3.Cluster {
 }
 
 // buildHTTPConnectionManager returns the HTTP connection manager for the gateway.
-func buildHTTPConnectionManager(opts Options, httpFilters string) *envoyconfigmanagerv3.HttpConnectionManager {
+func buildHTTPConnectionManager(opts Options, httpFilters []*envoyconfigmanagerv3.HttpFilter) *envoyconfigmanagerv3.HttpConnectionManager {
 	routerConfig, err := anypb.New(&routerv3.Router{})
 	if err != nil {
 		panic(err)
 	}
 
+	if len(httpFilters) == 0 {
+		httpFilters = []*envoyconfigmanagerv3.HttpFilter{
+			{
+				Name:       "envoy.filters.http.router",
+				ConfigType: &envoyconfigmanagerv3.HttpFilter_TypedConfig{TypedConfig: routerConfig},
+			},
+		}
+	} else {
+		httpFilters = append(httpFilters, &envoyconfigmanagerv3.HttpFilter{
+			Name:       "envoy.filters.http.router",
+			ConfigType: &envoyconfigmanagerv3.HttpFilter_TypedConfig{TypedConfig: routerConfig},
+		})
+	}
+
 	routes := []*routev3.Route{
 		opts.MetricsReadOptions.BackendConfig.toRoute(metricsReadClusterName),
 		opts.MetricsWriteOptions.BackendConfig.toRoute(metricsWriteClusterName),
-	}
-
-	var hvOpts = make([]*envoyconfigcorev3.HeaderValueOption, len(opts.HeaderManipulations))
-	for i, headerManipulation := range opts.HeaderManipulations {
-		hvOpts[i] = &envoyconfigcorev3.HeaderValueOption{
-			Header: &envoyconfigcorev3.HeaderValue{
-				Key:   headerManipulation.InternalHeader,
-				Value: fmt.Sprintf(`%%REQ(%s)%%`, headerManipulation.ExternalHeader),
-			},
-		}
 	}
 
 	return &envoyconfigmanagerv3.HttpConnectionManager{
@@ -146,8 +199,7 @@ func buildHTTPConnectionManager(opts Options, httpFilters string) *envoyconfigma
 
 		RouteSpecifier: &envoyconfigmanagerv3.HttpConnectionManager_RouteConfig{
 			RouteConfig: &routev3.RouteConfiguration{
-				Name:                "service",
-				RequestHeadersToAdd: hvOpts,
+				Name: "service",
 				VirtualHosts: []*routev3.VirtualHost{
 					{
 						Name:    "service",
@@ -157,12 +209,7 @@ func buildHTTPConnectionManager(opts Options, httpFilters string) *envoyconfigma
 				},
 			},
 		},
-		HttpFilters: []*envoyconfigmanagerv3.HttpFilter{
-			{
-				Name:       "http-router",
-				ConfigType: &envoyconfigmanagerv3.HttpFilter_TypedConfig{TypedConfig: routerConfig},
-			},
-		},
+		HttpFilters: httpFilters,
 	}
 }
 
@@ -173,8 +220,37 @@ func (t Backend) toCluster(name string) *envoyconfigclusterv3.Cluster {
 
 // toRoute returns the envoy route for the backend.
 func (t Backend) toRoute(cluster string) *routev3.Route {
+	var requestHeaderToAdd []*envoyconfigcorev3.HeaderValueOption
+	for header, value := range t.HeaderModification.AddHeaders {
+		requestHeaderToAdd = append(requestHeaderToAdd, &envoyconfigcorev3.HeaderValueOption{
+			Header: &envoyconfigcorev3.HeaderValue{
+				Key:   header,
+				Value: value,
+			},
+			AppendAction: envoyconfigcorev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		})
+	}
+	var headerMatch []*routev3.HeaderMatcher
+	if t.HeaderMatcher != nil {
+		headerMatch = []*routev3.HeaderMatcher{
+			{
+				Name: t.HeaderMatcher.Name,
+				HeaderMatchSpecifier: &routev3.HeaderMatcher_StringMatch{
+					StringMatch: &matcher.StringMatcher{
+						MatchPattern: &matcher.StringMatcher_SafeRegex{
+							SafeRegex: &matcher.RegexMatcher{
+								Regex: t.HeaderMatcher.Regex,
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
 	return &routev3.Route{
 		Match: &routev3.RouteMatch{
+			Headers: headerMatch,
 			PathSpecifier: &routev3.RouteMatch_SafeRegex{
 				SafeRegex: &matcher.RegexMatcher{
 					Regex: t.MatchRouteRegex,
@@ -186,6 +262,8 @@ func (t Backend) toRoute(cluster string) *routev3.Route {
 				ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: cluster},
 			},
 		},
+		RequestHeadersToAdd:    requestHeaderToAdd,
+		RequestHeadersToRemove: t.HeaderModification.RemoveHeaders,
 	}
 }
 

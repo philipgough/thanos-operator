@@ -17,7 +17,7 @@ const (
 	envoyImage = "envoyproxy/envoy"
 	envoyTag   = "v1.30.6"
 
-	httpbinName  = "httpbin"
+	httpbinName  = "httpbin.org"
 	httpPort     = 80
 	httpbinImage = "kennethreitz/httpbin"
 	httpbinTag   = "latest"
@@ -86,6 +86,7 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			log.Fatalf("could not purge resource: %s", err)
 		}
+		network.Close()
 	}
 
 	defer cleanup()
@@ -146,11 +147,9 @@ func TestOpts_HeaderManipulation(t *testing.T) {
 	fromHeaderVal := "test"
 	toHeader := "X-Thanos-Tenant"
 	opts := Options{
-		HeaderManipulations: []HeaderManipulationConfig{
-			{
-				ExternalHeader: fromHeader,
-				InternalHeader: toHeader,
-			},
+		HeaderManipulation: &HeaderManipulationConfig{
+			ExternalHeader: fromHeader,
+			InternalHeader: toHeader,
 		},
 		MetricsReadOptions: MetricsReadOptions{
 			BackendConfig: Backend{
@@ -190,6 +189,299 @@ func TestOpts_HeaderManipulation(t *testing.T) {
 	}
 }
 
+func TestOpts_HeaderModification(t *testing.T) {
+	someHeaderToInitiallySend := "X-Some-Test-Header-To-Send"
+	someHeaderToInitiallySendVal := "test-send"
+
+	someHeaderToAddAtRouteMatch := "X-Some-Test-Header"
+	someHeaderToAddAtRouteMatchVal := "test-add"
+	opts := Options{
+		MetricsReadOptions: MetricsReadOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: readPath,
+				HeaderModification: HeaderModification{
+					AddHeaders: map[string]string{
+						someHeaderToAddAtRouteMatch: someHeaderToAddAtRouteMatchVal,
+					},
+					RemoveHeaders: []string{someHeaderToInitiallySend},
+				},
+			},
+		},
+		MetricsWriteOptions: MetricsWriteOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: writePath,
+			},
+		},
+	}
+	resource := runEnvoy(t, opts.BuildRaw())
+	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+	req.Header.Add(someHeaderToInitiallySend, someHeaderToInitiallySendVal)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+	respBody := getAnythingResponseBody(t, resp.Body)
+	_, ok := respBody.Headers[someHeaderToInitiallySend]
+	if ok {
+		t.Fatalf("expected header %s to be removed", someHeaderToInitiallySend)
+	}
+
+	if respBody.Headers[someHeaderToAddAtRouteMatch] != someHeaderToAddAtRouteMatchVal {
+		t.Fatalf("expected header %s to be %s, got %s", someHeaderToAddAtRouteMatch, someHeaderToAddAtRouteMatchVal, respBody.Headers[someHeaderToAddAtRouteMatch])
+	}
+}
+
+func TestOpts_HeaderMatching(t *testing.T) {
+	fromHeader := "X-Some-Test-Header"
+	fromHeaderVal := "test"
+	toHeader := "X-Thanos-Tenant"
+
+	opts := Options{
+		HeaderManipulation: &HeaderManipulationConfig{
+			ExternalHeader: fromHeader,
+			InternalHeader: toHeader,
+		},
+		MetricsReadOptions: MetricsReadOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: readPath,
+			},
+		},
+		MetricsWriteOptions: MetricsWriteOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: writePath,
+				HeaderMatcher: &HeaderMatcher{
+					Name:  toHeader,
+					Regex: "test.*",
+				},
+			},
+		},
+	}
+	resource := runEnvoy(t, opts.BuildRaw())
+	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, writePath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status code 404, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, writePath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+	req.Header.Add(fromHeader, fromHeaderVal)
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestOpts_HeaderTransformMatching(t *testing.T) {
+	someHeaderToInitiallySend := "X-Some-Test-Header-To-Send"
+	someHeaderToInitiallySendVal := "test-send"
+	toHeader := "X-Thanos-Tenant"
+
+	opts := Options{
+		HeaderManipulation: &HeaderManipulationConfig{
+			ExternalHeader: someHeaderToInitiallySend,
+			InternalHeader: toHeader,
+		},
+		MetricsReadOptions: MetricsReadOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: readPath,
+			},
+		},
+		MetricsWriteOptions: MetricsWriteOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: writePath,
+				HeaderMatcher: &HeaderMatcher{
+					Name:  toHeader,
+					Regex: "test.*",
+				},
+			},
+		},
+	}
+	resource := runEnvoy(t, opts.BuildRaw())
+	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, writePath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status code 404, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, writePath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+	req.Header.Add(someHeaderToInitiallySend, someHeaderToInitiallySendVal)
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestOpts_HeaderMatchedAndDroppedUpstream(t *testing.T) {
+	someHeaderToInitiallySend := "X-Thanos-Tenant"
+	someHeaderToInitiallySendVal := "test-send"
+
+	opts := Options{
+		MetricsReadOptions: MetricsReadOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: readPath,
+			},
+		},
+		MetricsWriteOptions: MetricsWriteOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: writePath,
+				HeaderMatcher: &HeaderMatcher{
+					Name:  someHeaderToInitiallySend,
+					Regex: "test.*",
+				},
+				HeaderModification: HeaderModification{
+					RemoveHeaders: []string{someHeaderToInitiallySend},
+				},
+			},
+		},
+	}
+	resource := runEnvoy(t, opts.BuildRaw())
+	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, writePath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status code 404, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, writePath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+	req.Header.Add(someHeaderToInitiallySend, someHeaderToInitiallySendVal)
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+
+	respBody := getAnythingResponseBody(t, resp.Body)
+	if _, ok := respBody.Headers[someHeaderToInitiallySend]; ok {
+		t.Fatalf("expected header %s to be removed", someHeaderToInitiallySend)
+	}
+}
+
 func getAnythingResponseBody(t *testing.T, closer io.ReadCloser) anythingResponse {
 	t.Helper()
 	var anyResp anythingResponse
@@ -204,6 +496,13 @@ func runEnvoy(t *testing.T, withConfig string) *dockertest.Resource {
 	t.Helper()
 	dir := t.TempDir()
 	err := os.WriteFile(dir+"/envoy.yaml", []byte(withConfig), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Println(withConfig)
+
+	err = os.WriteFile("/tmp/envoy.yaml", []byte(withConfig), 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
