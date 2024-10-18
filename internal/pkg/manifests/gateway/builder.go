@@ -3,9 +3,6 @@ package gateway
 import (
 	"fmt"
 
-	"net/url"
-	"strconv"
-
 	envoyconfigbootstrapv3 "github.com/envoyproxy/go-control-plane/envoy/config/bootstrap/v3"
 	envoyconfigclusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoyconfigcorev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -15,6 +12,7 @@ import (
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	envoyconfigmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	matcher "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
+	"github.com/thanos-community/thanos-operator/internal/pkg/manifests"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -24,282 +22,132 @@ const (
 	metricsReadClusterName  = "metrics_read"
 	metricsWriteClusterName = "metrics_write"
 
-	envoyAdminAddress = "127.0.0.1"
-	envoyAdminPort    = 9901
-
 	envoyListenerName    = "http_listener"
 	envoyListenerAddress = "0.0.0.0"
 	envoyListenerPort    = 8080
 
+	envoyAdminAddress = envoyListenerAddress
+	envoyAdminPort    = 9901
+
 	statsPrefix = "ingress_http"
 )
 
+// MetricsReadOptions is the configuration for the metrics read backend.
 type MetricsReadOptions struct {
-	BackendConfig TmpBackend
+	BackendConfig Backend
 }
 
+// MetricsWriteOptions is the configuration for the metrics write backend.
 type MetricsWriteOptions struct {
-	BackendConfig TmpBackend
+	BackendConfig Backend
 }
 
-type TmpBackend struct {
-	Address string
-	Port    int
-}
-
+// Backend is the configuration for a backend.
+// MatchRouteRegex is the regex to match the route.
 type Backend struct {
-	Name          string
-	URL           url.URL
-	TargetCluster string
-	RouteMappings []PathSpecifier
-	IsHeadlessSvc bool
+	Address         string
+	Port            int
+	MatchRouteRegex string
 }
 
-type PathSpecifier struct {
-	IsRegex bool
-	Value   string
-}
-
-// Tenant defines the tenant configuration.
-type Tenant struct {
-	// HeaderMatcher is the header matcher configuration.
-	HeaderMatcher *HeaderMatcher
-}
-
-// HeaderMatcher defines the header matcher configuration.
-type HeaderMatcher struct {
-	// HeaderMatcherKey is the header matcher to match the tenant against.
-	HeaderMatcherKey string
-	// HeaderMatcherValue is the header matcher value to match the tenant against.
-	HeaderMatcherValue string
-}
-
-// JWTProvider defines the JWT provider configuration.
-type JWTProvider struct {
-	// Name of the JWT provider.
-	Name string `json:"name"`
-	// Issuer URL of the JWT provider.
-	Issuer string `json:"issuer"`
-	// Audiences of the JWT provider.
-	// A list of JWT audiences allowed to access.
-	// A JWT containing any of these audiences will be accepted.
-	// If not specified, the audiences in JWT will not be checked.
-	Audiences []string `json:"audiences"`
-	// RemoteJWKsURI is the URL of the JWKs endpoint
-	RemoteJWKsURI url.URL `json:"remoteJWKsURI"`
-	// LocalJWK is the local JWKs.
-	// If provided it is preferred over RemoteJWKsURI.
-	LocalJWKs *string `json:"localJWKs"`
-}
-
+// HeaderManipulationConfig is the configuration for header manipulation.
 type HeaderManipulationConfig struct {
 	ExternalHeader string
 	InternalHeader string
 }
 
-// Options defines the options for the gateway builder.
+// Options is the configuration for the gateway.
 type Options struct {
-	Backends           []Backend
-	JWTProviders       []JWTProvider
-	HeaderManipulation *HeaderManipulationConfig
+	manifests.Options
+	HeaderManipulations []HeaderManipulationConfig
+	MetricsReadOptions  MetricsReadOptions
+	MetricsWriteOptions MetricsWriteOptions
 }
 
-func BuildGatewayConfig(opts Options) (string, error) {
-	bootstrap, err := buildEnvoyConfig(opts)
+// BuildRaw returns raw JSON configuration for envoy proxy or panics if it fails.
+func (opts Options) BuildRaw() string {
+	connManager := buildHTTPConnectionManager(opts, "")
+	pbCM, err := anypb.New(connManager)
 	if err != nil {
-		return "", err
+		panic(err)
 	}
 
-	marshalOpts := protojson.MarshalOptions{Indent: "  "}
-	b, err := marshalOpts.Marshal(bootstrap)
-	if err != nil {
-		return "", fmt.Errorf("marshal: %w", err)
+	filterChains := []*listenerv3.FilterChain{
+		{
+			Filters: []*listenerv3.Filter{
+				{
+					Name: "envoy.filters.network.http_connection_manager",
+					ConfigType: &listenerv3.Filter_TypedConfig{
+						TypedConfig: pbCM,
+					},
+				},
+			},
+		},
 	}
-	return string(b), nil
-}
 
-func buildEnvoyConfig(opts Options) (*envoyconfigbootstrapv3.Bootstrap, error) {
-	listener, err := buildEnvoyListener(opts)
+	listener, err := buildEnvoyListener(filterChains)
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
+
 	bootstrap := &envoyconfigbootstrapv3.Bootstrap{
 		Admin: buildEnvoyAdminConfig(),
 		StaticResources: &envoyconfigbootstrapv3.Bootstrap_StaticResources{
 			Listeners: []*listenerv3.Listener{
 				listener,
 			},
-			Clusters: buildEnvoyClusters(opts),
+			Clusters: buildClusters(opts),
 		},
 	}
 
-	return bootstrap, nil
-}
-
-func buildEnvoyListener(opts Options) (*listenerv3.Listener, error) {
-	var matchers []routeMatcher
-	for _, backend := range opts.Backends {
-		for _, route := range backend.RouteMappings {
-			matchers = append(matchers, routeMatcher{
-				routes:    []string{route.Value},
-				toCluster: backend.TargetCluster,
-			})
-		}
-	}
-
-	filter, err := buildEnvoyFilter(statsPrefix, opts)
+	marshalOpts := protojson.MarshalOptions{Indent: "  "}
+	b, err := marshalOpts.Marshal(bootstrap)
 	if err != nil {
-		return nil, err
-	}
+		panic(err)
 
-	listener := &listenerv3.Listener{
-		Name: envoyListenerName,
-		Address: &envoyconfigcorev3.Address{
-			Address: &envoyconfigcorev3.Address_SocketAddress{
-				SocketAddress: &envoyconfigcorev3.SocketAddress{
-					Address: envoyListenerAddress,
-					PortSpecifier: &envoyconfigcorev3.SocketAddress_PortValue{
-						PortValue: envoyListenerPort,
-					},
-				},
-			},
-		},
-		FilterChains: []*listenerv3.FilterChain{
-			{
-				Filters: []*listenerv3.Filter{
-					filter,
-				},
-			},
-		},
 	}
-	return listener, nil
+	return string(b)
 }
 
-func buildEnvoyClusters(opts Options) []*envoyconfigclusterv3.Cluster {
-	var clusters []*envoyconfigclusterv3.Cluster
-	//for _, jwtP := range opts.JWTProviders {
-	//	if jwtP.LocalJWKs != nil {
-	//		continue
-	//	}
-	//
-	//	buildEnvoyCluster(jwtP.Name, jwtP.RemoteJWKsURI, envoyconfigclusterv3.Cluster_LOGICAL_DNS)
-	//	clusters = append(clusters, buildEnvoyCluster(jwtP.Name, jwtP.RemoteJWKsURI, envoyconfigclusterv3.Cluster_LOGICAL_DNS))
-	//}
-
-	for _, backend := range opts.Backends {
-		discovery := envoyconfigclusterv3.Cluster_LOGICAL_DNS
-		if backend.IsHeadlessSvc {
-			discovery = envoyconfigclusterv3.Cluster_STRICT_DNS
-		}
-		clusters = append(clusters, buildEnvoyCluster(backend.TargetCluster, backend.URL, discovery))
+// buildClusters returns the envoy clusters for the gateway.
+func buildClusters(opts Options) []*envoyconfigclusterv3.Cluster {
+	clusters := []*envoyconfigclusterv3.Cluster{
+		opts.MetricsReadOptions.BackendConfig.toCluster(metricsReadClusterName),
+		opts.MetricsWriteOptions.BackendConfig.toCluster(metricsWriteClusterName),
 	}
-
 	return clusters
 }
 
-func buildEnvoyCluster(name string, url url.URL, discovery envoyconfigclusterv3.Cluster_DiscoveryType) *envoyconfigclusterv3.Cluster {
-	cluster := &envoyconfigclusterv3.Cluster{
-		Name:                 name,
-		ClusterDiscoveryType: &envoyconfigclusterv3.Cluster_Type{Type: discovery},
-		LoadAssignment: &endpointv3.ClusterLoadAssignment{
-			ClusterName: name,
-			Endpoints: []*endpointv3.LocalityLbEndpoints{
-				{
-					LbEndpoints: []*endpointv3.LbEndpoint{
-						{
-							HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
-								Endpoint: &endpointv3.Endpoint{
-									Address: &envoyconfigcorev3.Address{
-										Address: &envoyconfigcorev3.Address_SocketAddress{
-											SocketAddress: &envoyconfigcorev3.SocketAddress{
-												Address: url.Hostname(),
-												PortSpecifier: &envoyconfigcorev3.SocketAddress_PortValue{
-													PortValue: portToUInt32(url),
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+// buildHTTPConnectionManager returns the HTTP connection manager for the gateway.
+func buildHTTPConnectionManager(opts Options, httpFilters string) *envoyconfigmanagerv3.HttpConnectionManager {
+	routerConfig, err := anypb.New(&routerv3.Router{})
+	if err != nil {
+		panic(err)
 	}
-	if url.Scheme == "https" {
-		cluster.TransportSocket = &envoyconfigcorev3.TransportSocket{
-			Name: "envoy.transport_sockets.tls",
-			ConfigType: &envoyconfigcorev3.TransportSocket_TypedConfig{
-				TypedConfig: &anypb.Any{
-					TypeUrl: "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
-				},
-			},
-		}
+
+	routes := []*routev3.Route{
+		opts.MetricsReadOptions.BackendConfig.toRoute(metricsReadClusterName),
+		opts.MetricsWriteOptions.BackendConfig.toRoute(metricsWriteClusterName),
 	}
-	return cluster
-}
 
-func buildEnvoyRoutesTo(opts Options) []*routev3.Route {
-	var hvOpts []*envoyconfigcorev3.HeaderValueOption
-
-	if opts.HeaderManipulation != nil {
-		hvOpts = append(hvOpts, &envoyconfigcorev3.HeaderValueOption{
+	var hvOpts = make([]*envoyconfigcorev3.HeaderValueOption, len(opts.HeaderManipulations))
+	for i, headerManipulation := range opts.HeaderManipulations {
+		hvOpts[i] = &envoyconfigcorev3.HeaderValueOption{
 			Header: &envoyconfigcorev3.HeaderValue{
-				Key:   opts.HeaderManipulation.InternalHeader,
-				Value: fmt.Sprintf(`%%REQ(%s)%%`, opts.HeaderManipulation.ExternalHeader),
+				Key:   headerManipulation.InternalHeader,
+				Value: fmt.Sprintf(`%%REQ(%s)%%`, headerManipulation.ExternalHeader),
 			},
-		})
-	}
-
-	var routes []*routev3.Route
-	for _, backend := range opts.Backends {
-		for _, route := range backend.RouteMappings {
-			envoyRoute := &routev3.Route{
-				RequestHeadersToAdd: hvOpts,
-				Action: &routev3.Route_Route{
-					Route: &routev3.RouteAction{
-						ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: backend.TargetCluster},
-						PrefixRewrite:    "/",
-					},
-				},
-			}
-			if route.IsRegex {
-				envoyRoute.Match = &routev3.RouteMatch{
-					PathSpecifier: &routev3.RouteMatch_SafeRegex{
-						SafeRegex: &matcher.RegexMatcher{
-							Regex: route.Value,
-						},
-					},
-				}
-			} else {
-				envoyRoute.Match = &routev3.RouteMatch{
-					PathSpecifier: &routev3.RouteMatch_PathSeparatedPrefix{PathSeparatedPrefix: route.Value},
-				}
-			}
-			routes = append(routes, envoyRoute)
 		}
 	}
 
-	return routes
-}
-
-type routeMatcher struct {
-	routes    []string
-	toCluster string
-}
-
-func buildEnvoyFilter(statPrefix string, opts Options) (*listenerv3.Filter, error) {
-	routes := buildEnvoyRoutesTo(opts)
-
-	routerConfig, _ := anypb.New(&routerv3.Router{})
-	manager := &envoyconfigmanagerv3.HttpConnectionManager{
+	return &envoyconfigmanagerv3.HttpConnectionManager{
 		CodecType:  envoyconfigmanagerv3.HttpConnectionManager_AUTO,
-		StatPrefix: statPrefix,
+		StatPrefix: statsPrefix,
 
 		RouteSpecifier: &envoyconfigmanagerv3.HttpConnectionManager_RouteConfig{
 			RouteConfig: &routev3.RouteConfiguration{
-				Name: "service",
+				Name:                "service",
+				RequestHeadersToAdd: hvOpts,
 				VirtualHosts: []*routev3.VirtualHost{
 					{
 						Name:    "service",
@@ -316,19 +164,95 @@ func buildEnvoyFilter(statPrefix string, opts Options) (*listenerv3.Filter, erro
 			},
 		},
 	}
-	connMgrTypedConf, err := anypb.New(manager)
-	if err != nil {
-		return nil, err
-	}
-
-	return &listenerv3.Filter{
-		Name: "envoy.filters.network.http_connection_manager",
-		ConfigType: &listenerv3.Filter_TypedConfig{
-			TypedConfig: connMgrTypedConf,
-		},
-	}, nil
 }
 
+// toCluster returns the envoy cluster for the backend.
+func (t Backend) toCluster(name string) *envoyconfigclusterv3.Cluster {
+	return buildEnvoyCluster(name, "http", t.Address, t.Port, envoyconfigclusterv3.Cluster_LOGICAL_DNS)
+}
+
+// toRoute returns the envoy route for the backend.
+func (t Backend) toRoute(cluster string) *routev3.Route {
+	return &routev3.Route{
+		Match: &routev3.RouteMatch{
+			PathSpecifier: &routev3.RouteMatch_SafeRegex{
+				SafeRegex: &matcher.RegexMatcher{
+					Regex: t.MatchRouteRegex,
+				},
+			},
+		},
+		Action: &routev3.Route_Route{
+			Route: &routev3.RouteAction{
+				ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: cluster},
+			},
+		},
+	}
+}
+
+// buildEnvoyListener returns the envoy listener for the gateway.
+func buildEnvoyListener(filterChains []*listenerv3.FilterChain) (*listenerv3.Listener, error) {
+	listener := &listenerv3.Listener{
+		Name: envoyListenerName,
+		Address: &envoyconfigcorev3.Address{
+			Address: &envoyconfigcorev3.Address_SocketAddress{
+				SocketAddress: &envoyconfigcorev3.SocketAddress{
+					Address: envoyListenerAddress,
+					PortSpecifier: &envoyconfigcorev3.SocketAddress_PortValue{
+						PortValue: envoyListenerPort,
+					},
+				},
+			},
+		},
+		FilterChains: filterChains,
+	}
+	return listener, nil
+}
+
+// buildEnvoyCluster returns the envoy cluster for the backend.
+func buildEnvoyCluster(name string, scheme, address string, port int, discovery envoyconfigclusterv3.Cluster_DiscoveryType) *envoyconfigclusterv3.Cluster {
+	cluster := &envoyconfigclusterv3.Cluster{
+		Name:                 name,
+		ClusterDiscoveryType: &envoyconfigclusterv3.Cluster_Type{Type: discovery},
+		LoadAssignment: &endpointv3.ClusterLoadAssignment{
+			ClusterName: name,
+			Endpoints: []*endpointv3.LocalityLbEndpoints{
+				{
+					LbEndpoints: []*endpointv3.LbEndpoint{
+						{
+							HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
+								Endpoint: &endpointv3.Endpoint{
+									Address: &envoyconfigcorev3.Address{
+										Address: &envoyconfigcorev3.Address_SocketAddress{
+											SocketAddress: &envoyconfigcorev3.SocketAddress{
+												Address: address,
+												PortSpecifier: &envoyconfigcorev3.SocketAddress_PortValue{
+													PortValue: uint32(port),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if scheme == "https" {
+		cluster.TransportSocket = &envoyconfigcorev3.TransportSocket{
+			Name: "envoy.transport_sockets.tls",
+			ConfigType: &envoyconfigcorev3.TransportSocket_TypedConfig{
+				TypedConfig: &anypb.Any{
+					TypeUrl: "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+				},
+			},
+		}
+	}
+	return cluster
+}
+
+// buildEnvoyAdminConfig returns the envoy admin configuration.
 func buildEnvoyAdminConfig() *envoyconfigbootstrapv3.Admin {
 	admin := &envoyconfigbootstrapv3.Admin{
 		Address: &envoyconfigcorev3.Address{
@@ -342,19 +266,5 @@ func buildEnvoyAdminConfig() *envoyconfigbootstrapv3.Admin {
 			},
 		},
 	}
-
 	return admin
-}
-
-func portToUInt32(url url.URL) uint32 {
-	if url.Port() == "" {
-		if url.Scheme == "https" {
-			return 443
-		}
-		if url.Scheme == "http" {
-			return 80
-		}
-	}
-	p, _ := strconv.Atoi(url.Port())
-	return uint32(p)
 }
