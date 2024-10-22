@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	url2 "net/url"
 	"os"
 	"testing"
 
@@ -112,7 +113,7 @@ func TestOpts_Routing(t *testing.T) {
 			},
 		},
 	}
-	resource := runEnvoy(t, opts.BuildRaw())
+	resource := runEnvoy(t, opts.BuildRawOrDie())
 	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
 
 	resp, err := http.Get(fmt.Sprintf("http://localhost:%s%s", port, readPath))
@@ -166,7 +167,7 @@ func TestOpts_HeaderManipulation(t *testing.T) {
 			},
 		},
 	}
-	resource := runEnvoy(t, opts.BuildRaw())
+	resource := runEnvoy(t, opts.BuildRawOrDie())
 	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
 	if err != nil {
@@ -217,7 +218,7 @@ func TestOpts_HeaderModification(t *testing.T) {
 			},
 		},
 	}
-	resource := runEnvoy(t, opts.BuildRaw())
+	resource := runEnvoy(t, opts.BuildRawOrDie())
 	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
 	if err != nil {
@@ -274,7 +275,7 @@ func TestOpts_HeaderMatching(t *testing.T) {
 			},
 		},
 	}
-	resource := runEnvoy(t, opts.BuildRaw())
+	resource := runEnvoy(t, opts.BuildRawOrDie())
 	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
 	if err != nil {
@@ -352,7 +353,7 @@ func TestOpts_HeaderTransformMatching(t *testing.T) {
 			},
 		},
 	}
-	resource := runEnvoy(t, opts.BuildRaw())
+	resource := runEnvoy(t, opts.BuildRawOrDie())
 	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
 	if err != nil {
@@ -428,7 +429,7 @@ func TestOpts_HeaderMatchedAndDroppedUpstream(t *testing.T) {
 			},
 		},
 	}
-	resource := runEnvoy(t, opts.BuildRaw())
+	resource := runEnvoy(t, opts.BuildRawOrDie())
 	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
 	if err != nil {
@@ -479,6 +480,97 @@ func TestOpts_HeaderMatchedAndDroppedUpstream(t *testing.T) {
 	respBody := getAnythingResponseBody(t, resp.Body)
 	if _, ok := respBody.Headers[someHeaderToInitiallySend]; ok {
 		t.Fatalf("expected header %s to be removed", someHeaderToInitiallySend)
+	}
+}
+
+func TestOpts_TokenAuth(t *testing.T) {
+	u, err := url2.Parse("https://raw.githubusercontent.com/istio/istio/master/security/tools/jwt/samples/jwks.json")
+	if err != nil {
+		t.Fatalf("could not parse URL: %s", err)
+	}
+	jwtProvider := &JWTProvider{
+		Issuer:        "testing@secure.istio.io",
+		RemoteJWKsURI: *u,
+	}
+
+	opts := Options{
+		TokenAuthConfig: &TokenAuthConfig{
+			JWTProvider: jwtProvider,
+		},
+		MetricsReadOptions: MetricsReadOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: readPath,
+				TokenAuthConfig: &BackendTokenAuthConfig{
+					JWTAuth: &BackendJWTAuth{
+						Audiences:    nil,
+						CelTokenRBAC: nil,
+					},
+				},
+			},
+		},
+		MetricsWriteOptions: MetricsWriteOptions{
+			BackendConfig: Backend{
+				Address:         httpbinName,
+				Port:            httpPort,
+				MatchRouteRegex: writePath,
+			},
+		},
+	}
+	resource := runEnvoy(t, opts.BuildRawOrDie())
+	port := resource.GetPort(fmt.Sprintf("%d/tcp", envoyListenerPort))
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, writePath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status code 404, got %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s%s", port, readPath), nil)
+	if err != nil {
+		t.Fatalf("could not create request: %s", err)
+	}
+
+	//token, err := os.ReadFile("testdata/demo.jwt")
+	//if err != nil {
+	//	log.Fatalf("unable to read file: %v", err)
+	//}
+
+	token := `eyJhbGciOiJSUzI1NiIsImtpZCI6IkRIRmJwb0lVcXJZOHQyenBBMnFYZkNtcjVWTzVaRXI0UnpIVV8tZW52dlEiLCJ0eXAiOiJKV1QifQ.eyJleHAiOjM1MzczOTExMDQsImdyb3VwcyI6WyJncm91cDEiLCJncm91cDIiXSwiaWF0IjoxNTM3MzkxMTA0LCJpc3MiOiJ0ZXN0aW5nQHNlY3VyZS5pc3Rpby5pbyIsInNjb3BlIjpbInNjb3BlMSIsInNjb3BlMiJdLCJzdWIiOiJ0ZXN0aW5nQHNlY3VyZS5pc3Rpby5pbyJ9.EdJnEZSH6X8hcyEii7c8H5lnhgjB5dwo07M5oheC8Xz8mOllyg--AHCFWHybM48reunF--oGaG6IXVngCEpVF0_P5DwsUoBgpPmK1JOaKN6_pe9sh0ZwTtdgK_RP01PuI7kUdbOTlkuUi2AO-qUyOm7Art2POzo36DLQlUXv8Ad7NBOqfQaKjE9ndaPWT7aexUsBHxmgiGbz1SyLH879f7uHYPbPKlpHU6P9S-DaKnGLaEchnoKnov7ajhrEhGXAQRukhDPKUHO9L30oPIr5IJllEQfHYtt6IZvlNUGeLUcif3wpry1R5tBXRicx2sXMQ7LyuDremDbcNy_iE76Upg`
+	tkn := fmt.Sprintf("Bearer %s", string(token))
+	req.Header.Add("Authorization", tkn)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("could not get response: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status code 200, got %d", resp.StatusCode)
 	}
 }
 
@@ -567,4 +659,8 @@ type anythingResponse struct {
 	Method  string            `json:"method"`
 	Origin  string            `json:"origin"`
 	URL     string            `json:"url"`
+}
+
+func TestGetRBAC(t *testing.T) {
+	getRBAC()
 }

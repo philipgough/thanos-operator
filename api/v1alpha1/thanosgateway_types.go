@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -95,6 +96,46 @@ type MetricsWriteSpec struct {
 	// HeaderModification defines the configuration for header modification.
 	// +kubebuilder:validation:Optional
 	HeaderModification *HeaderModification `json:"headerModification,omitempty"`
+}
+
+// TokenAuthConfig defines the configuration for token authentication.
+// This allows for the use of one of the following
+// 1. Kubernetes TokenReview for authentication.
+// 2. JWT token for authentication.
+// It is invalid to have both JWT and TokenReview enabled.
+type TokenAuthConfig struct {
+	// Enable Kubernetes TokenReview for authentication.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	Enable bool `json:"enable,omitempty"`
+	// JWTProvider enables and configures JWT token for authentication.
+	// +kubebuilder:validation:Optional
+	JWTProvider *JWTProviderConfig `json:"jwtProvider,omitempty"`
+}
+
+// JWTProviderConfig defines the JWT provider configuration.
+// JWT will be validated against the JWT provider.
+// JWT is extracted from the Authorization header and is expected to be in the form of Bearer token.
+type JWTProviderConfig struct {
+	// Name of the JWT provider.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// Issuer is the principal that issues the JWT.
+	// +kubebuilder:validation:Required
+	Issuer string `json:"issuer"`
+	// Audiences of the JWT provider.
+	// A list of JWT audiences allowed to access.
+	// A JWT containing any of these audiences will be accepted.
+	// If not specified, the audiences in JWT will not be checked.
+	Audiences []string `json:"audiences,omitempty"`
+	// RemoteJWKsURI is the URL of the JWKs endpoint.
+	// +kubebuilder:validation:Optional
+	RemoteJWKsURI *string `json:"remoteJWKsURI,omitempty"`
+	// LocalJWKS is the local JWKs.
+	// If provided, it is preferred over RemoteJWKsURI.
+	// +kubebuilder:validation:Optional
+	LocalJWKS *v1.ConfigMapKeySelector `json:"localJWKS,omitempty"`
 }
 
 // ThanosGatewayStatus defines the observed state of ThanosGateway
