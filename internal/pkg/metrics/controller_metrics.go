@@ -40,6 +40,10 @@ type ThanosCompactMetrics struct {
 	*BaseMetrics
 }
 
+type ThanosGatewayMetrics struct {
+	*BaseMetrics
+}
+
 func NewBaseMetrics(reg prometheus.Registerer) *BaseMetrics {
 	return &BaseMetrics{
 		ReconciliationsTotal: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{

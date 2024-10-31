@@ -18,19 +18,30 @@ package controller
 
 import (
 	"context"
+	"github.com/go-logr/logr"
+	"github.com/thanos-community/thanos-operator/internal/pkg/handlers"
+	manifestcompact "github.com/thanos-community/thanos-operator/internal/pkg/manifests/compact"
+	controllermetrics "github.com/thanos-community/thanos-operator/internal/pkg/metrics"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/tools/record"
 
+	monitoringthanosiov1alpha1 "github.com/thanos-community/thanos-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	monitoringthanosiov1alpha1 "github.com/thanos-community/thanos-operator/api/v1alpha1"
 )
 
 // ThanosGatewayReconciler reconciles a ThanosGateway object
 type ThanosGatewayReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	logger   logr.Logger
+	metrics  controllermetrics.ThanosCompactMetrics
+	recorder record.EventRecorder
+
+	handler *handlers.Handler
 }
 
 //+kubebuilder:rbac:groups=monitoring.thanos.io,resources=thanosgateways,verbs=get;list;watch;create;update;patch;delete
@@ -47,9 +58,24 @@ type ThanosGatewayReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.3/pkg/reconcile
 func (r *ThanosGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	gateway := &monitoringthanosiov1alpha1.ThanosGateway{}
+	err := r.Get(ctx, req.NamespacedName, gateway)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			r.logger.Info("thanos compact resource not found. ignoring since object may be deleted")
+			return ctrl.Result{}, nil
+		}
+		r.logger.Error(err, "failed to get ThanosGateway")
+		r.metrics.ReconciliationsFailedTotal.WithLabelValues(manifestcompact.Name).Inc()
+		r.recorder.Event(gateway, corev1.EventTypeWarning, "GetFailed", "Failed to get ThanosGateway resource")
+		return ctrl.Result{}, err
+	}
 
-	// TODO(user): your logic here
+	if gateway.Spec.Paused != nil && *gateway.Spec.Paused {
+		r.logger.Info("reconciliation is paused for ThanosGateway resource")
+		r.recorder.Event(gateway, corev1.EventTypeNormal, "Paused", "Reconciliation is paused for ThanosGateway resource")
+		return ctrl.Result{}, nil
+	}
 
 	return ctrl.Result{}, nil
 }

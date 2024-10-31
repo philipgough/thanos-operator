@@ -62,77 +62,175 @@ spec:
                 description: MetricsReadSpec defines the configuration for reading
                   metrics.
                 properties:
-                  backendConfig:
-                    description: BackendConfig defines the configuration for the backend.
+                  backendSpec:
+                    description: BackendSpec defines the configuration for the backend.
                     properties:
-                      address:
-                        description: Address is the address of the backend.
-                        type: string
-                      port:
-                        description: Port is the port of the backend.
-                        format: int32
-                        type: integer
-                    required:
-                    - address
-                    - port
-                    type: object
-                  headerModification:
-                    description: HeaderModification defines the configuration for
-                      header modification.
-                    properties:
-                      addHeaders:
-                        additionalProperties:
-                          type: string
-                        description: AddHeaders is a list of headers to add to the
-                          request.
+                      backendConfig:
+                        description: BackendConfig is the configuration for the backend
+                          service.
+                        properties:
+                          address:
+                            description: Address is the address of the backend.
+                            type: string
+                          port:
+                            description: Port is the port of the backend.
+                            format: int32
+                            type: integer
+                        required:
+                        - address
+                        - port
                         type: object
-                      removeHeaders:
-                        description: RemoveHeaders is a list of headers to remove
-                          from the request.
-                        items:
+                      mtlsConfig:
+                        description: MTLSConfig is the configuration for mTLS.
+                        properties:
+                          matchSANs:
+                            description: |-
+                              MatchSANs is the list of SANs to match.
+                              If not specified, the SANs in the server certificate will not be checked.
+                            items:
+                              type: string
+                            type: array
+                          serverCert:
+                            description: ServerCert is the path to the server certificate.
+                            type: string
+                          serverKey:
+                            description: ServerKey is the path to the server key.
+                            type: string
+                          trustedCA:
+                            description: TrustedCA is the path to the trusted CA certificate.
+                            type: string
+                        required:
+                        - serverCert
+                        - serverKey
+                        - trustedCA
+                        type: object
+                      tokenAuthConfig:
+                        description: TokenAuthConfig is the configuration for token
+                          authentication.
+                        properties:
+                          enableKubernetesTokenReview:
+                            default: false
+                            description: |-
+                              EnableTokenReview enables token review.
+                              If not specified, token review will not be enabled.
+                            type: boolean
+                        type: object
+                    required:
+                    - backendConfig
+                    type: object
+                  policies:
+                    description: Policies is a list of label based access control
+                      policies to be applied to the request.
+                    items:
+                      description: |-
+                        Policy is a list of CEL expressions and matchers.
+                        If all the CELExpressions evaluate to true the Selectors are injected into the request.
+                      properties:
+                        expression:
+                          description: CELExpression is a CEL expression that must
+                            evaluate to true for the policy to be applied.
                           type: string
-                        type: array
+                        name:
+                          description: Name is a human-readable name for the policy.
+                          type: string
+                        selectors:
+                          description: Selectors is a list of matchers to be injected
+                            into the request as part of the policy if the CELExpression
+                            evaluates to true.
+                          items:
+                            description: Selector is a label selector that will be
+                              applied if the ConditionalSelector evaluates to true.
+                            properties:
+                              conditional_selector:
+                                description: |-
+                                  ConditionalSelector is a list of selectors that must all evaluate to true for the Selector to be applied.
+                                  This is optional and if not present the Selector will be applied if the CELExpression evaluates to true.
+                                type: string
+                              label_selector:
+                                description: LabelSelector is the label selector that
+                                  will be applied if all the selectors in the ConditionalSelector
+                                  are true.
+                                type: string
+                            required:
+                            - label_selector
+                            type: object
+                          type: array
+                      required:
+                      - expression
+                      - name
+                      - selectors
+                      type: object
+                    type: array
+                  rbacConfig:
+                    additionalProperties:
+                      type: string
+                    description: RBACConfig is the configuration for RBAC.
                     type: object
                 required:
-                - backendConfig
+                - backendSpec
                 type: object
               metricsWriteSpec:
                 description: MetricsWriteSpec defines the configuration for writing
                   metrics.
                 properties:
-                  backendConfig:
-                    description: BackendConfig defines the configuration for the backend.
+                  backendSpec:
+                    description: BackendSpec defines the configuration for the backend.
                     properties:
-                      address:
-                        description: Address is the address of the backend.
-                        type: string
-                      port:
-                        description: Port is the port of the backend.
-                        format: int32
-                        type: integer
-                    required:
-                    - address
-                    - port
-                    type: object
-                  headerModification:
-                    description: HeaderModification defines the configuration for
-                      header modification.
-                    properties:
-                      addHeaders:
-                        additionalProperties:
-                          type: string
-                        description: AddHeaders is a list of headers to add to the
-                          request.
+                      backendConfig:
+                        description: BackendConfig is the configuration for the backend
+                          service.
+                        properties:
+                          address:
+                            description: Address is the address of the backend.
+                            type: string
+                          port:
+                            description: Port is the port of the backend.
+                            format: int32
+                            type: integer
+                        required:
+                        - address
+                        - port
                         type: object
-                      removeHeaders:
-                        description: RemoveHeaders is a list of headers to remove
-                          from the request.
-                        items:
-                          type: string
-                        type: array
+                      mtlsConfig:
+                        description: MTLSConfig is the configuration for mTLS.
+                        properties:
+                          matchSANs:
+                            description: |-
+                              MatchSANs is the list of SANs to match.
+                              If not specified, the SANs in the server certificate will not be checked.
+                            items:
+                              type: string
+                            type: array
+                          serverCert:
+                            description: ServerCert is the path to the server certificate.
+                            type: string
+                          serverKey:
+                            description: ServerKey is the path to the server key.
+                            type: string
+                          trustedCA:
+                            description: TrustedCA is the path to the trusted CA certificate.
+                            type: string
+                        required:
+                        - serverCert
+                        - serverKey
+                        - trustedCA
+                        type: object
+                      tokenAuthConfig:
+                        description: TokenAuthConfig is the configuration for token
+                          authentication.
+                        properties:
+                          enableKubernetesTokenReview:
+                            default: false
+                            description: |-
+                              EnableTokenReview enables token review.
+                              If not specified, token review will not be enabled.
+                            type: boolean
+                        type: object
+                    required:
+                    - backendConfig
                     type: object
                 required:
-                - backendConfig
+                - backendSpec
                 type: object
               replicas:
                 default: 1

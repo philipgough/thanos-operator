@@ -44,6 +44,84 @@ type ThanosGatewaySpec struct {
 	MetricsWriteSpec MetricsWriteSpec `json:"metricsWriteSpec"`
 }
 
+// Policy is a list of CEL expressions and matchers.
+// If all the CELExpressions evaluate to true the Selectors are injected into the request.
+type Policy struct {
+	// Name is a human-readable name for the policy.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// CELExpression is a CEL expression that must evaluate to true for the policy to be applied.
+	// +kubebuilder:validation:Required
+	CELExpression string `json:"expression"`
+	// Selectors is a list of matchers to be injected into the request as part of the policy if the CELExpression evaluates to true.
+	// +kubebuilder:validation:Required
+	Selectors []Selector `json:"selectors"`
+}
+
+// Selector is a label selector that will be applied if the ConditionalSelector evaluates to true.
+type Selector struct {
+	// LabelSelector is the label selector that will be applied if all the selectors in the ConditionalSelector are true.
+	// +kubebuilder:validation:Required
+	LabelSelector string `json:"label_selector"`
+	// ConditionalSelector is a list of selectors that must all evaluate to true for the Selector to be applied.
+	// This is optional and if not present the Selector will be applied if the CELExpression evaluates to true.
+	// +kubebuilder:validation:Optional
+	ConditionalSelector *string `json:"conditional_selector,omitempty"`
+}
+
+// Backend defines the configuration for the backend.
+type Backend struct {
+	// Address is the address of the backend.
+	// +kubebuilder:validation:Required
+	Address string `json:"address"`
+	// Port is the port of the backend.
+	// +kubebuilder:validation:Required
+	Port int32 `json:"port"`
+}
+
+// HeaderMutation represents a mutation to be applied to HTTP headers.
+// It contains the header to be set and the value to set it to.
+type HeaderMutation struct {
+	// SetHeader is the name of the header to be set.
+	SetHeader string
+	// FromValue is the value to set the header to, implementing the fmt.Stringer interface.
+	//FromValue fmt.Stringer
+}
+
+// BackendTokenAuthConfig defines the configuration for token authentication.
+type BackendTokenAuthConfig struct {
+	// EnableTokenReview enables token review.
+	// If not specified, token review will not be enabled.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	EnableKubernetesTokenReview bool `json:"enableKubernetesTokenReview,omitempty"`
+}
+
+// MTLSConfig is the configuration for mTLS.
+type MTLSConfig struct {
+	// TrustedCA is the path to the trusted CA certificate.
+	TrustedCA string `json:"trustedCA"`
+	// ServerCert is the path to the server certificate.
+	ServerCert string `json:"serverCert"`
+	// ServerKey is the path to the server key.
+	ServerKey string `json:"serverKey"`
+	// MatchSANs is the list of SANs to match.
+	// If not specified, the SANs in the server certificate will not be checked.
+	MatchSANs []string `json:"matchSANs,omitempty"`
+}
+
+// BackendSpec is the configuration for the backend service.
+type BackendSpec struct {
+	// BackendConfig is the configuration for the backend service.
+	BackendConfig Backend `json:"backendConfig"`
+	// TokenAuthConfig is the configuration for token authentication.
+	// +kubebuilder:validation:Optional
+	TokenAuthConfig BackendTokenAuthConfig `json:"tokenAuthConfig"`
+	// MTLSConfig is the configuration for mTLS.
+	// +kubebuilder:validation:Optional
+	MTLSConfig *MTLSConfig `json:"mtlsConfig,omitempty"`
+}
+
 // HeaderManipulation defines the configuration for header manipulation.
 // It enables copying of a header value at request time to another header.
 // This process runs before the request is sent to the backend and is matched against any requirements
@@ -56,46 +134,24 @@ type HeaderManipulation struct {
 	ToHeader string `json:"toHeader"`
 }
 
-// HeaderModification defines the configuration for header modification.
-// This allows adding and removing headers from the request.
-// This process runs before the request is sent to the backend after a route is matched.
-type HeaderModification struct {
-	// AddHeaders is a list of headers to add to the request.
-	// +kubebuilder:validation:Optional
-	AddHeaders map[string]string `json:"addHeaders,omitempty"`
-	// RemoveHeaders is a list of headers to remove from the request.
-	// +kubebuilder:validation:Optional
-	RemoveHeaders []string `json:"removeHeaders,omitempty"`
-}
-
-// BackendConfig defines the configuration for the backend.
-type BackendConfig struct {
-	// Address is the address of the backend.
-	// +kubebuilder:validation:Required
-	Address string `json:"address"`
-	// Port is the port of the backend.
-	// +kubebuilder:validation:Required
-	Port int32 `json:"port"`
-}
-
 // MetricsReadSpec defines the configuration for reading metrics.
 type MetricsReadSpec struct {
-	// BackendConfig defines the configuration for the backend.
+	// BackendSpec defines the configuration for the backend.
 	// +kubebuilder:validation:Required
-	BackendConfig BackendConfig `json:"backendConfig"`
-	// HeaderModification defines the configuration for header modification.
+	BackendSpec BackendSpec `json:"backendSpec"`
+	// RBACConfig is the configuration for RBAC.
+	// +kubebuilder:validation:Optional`
+	RBACConfig map[string]string `json:"rbacConfig,omitempty"`
+	// Policies is a list of label based access control policies to be applied to the request.
 	// +kubebuilder:validation:Optional
-	HeaderModification *HeaderModification `json:"headerModification,omitempty"`
+	Policies []Policy `json:"policies,omitempty"`
 }
 
 // MetricsWriteSpec defines the configuration for writing metrics.
 type MetricsWriteSpec struct {
-	// BackendConfig defines the configuration for the backend.
+	// BackendSpec defines the configuration for the backend.
 	// +kubebuilder:validation:Required
-	BackendConfig BackendConfig `json:"backendConfig"`
-	// HeaderModification defines the configuration for header modification.
-	// +kubebuilder:validation:Optional
-	HeaderModification *HeaderModification `json:"headerModification,omitempty"`
+	BackendSpec BackendSpec `json:"backendSpec"`
 }
 
 // TokenAuthConfig defines the configuration for token authentication.
@@ -104,10 +160,10 @@ type MetricsWriteSpec struct {
 // 2. JWT token for authentication.
 // It is invalid to have both JWT and TokenReview enabled.
 type TokenAuthConfig struct {
-	// Enable Kubernetes TokenReview for authentication.
+	// EnableKubernetesTokenReview for authentication.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=false
-	Enable bool `json:"enable,omitempty"`
+	EnableKubernetesTokenReview bool `json:"enable,omitempty"`
 	// JWTProvider enables and configures JWT token for authentication.
 	// +kubebuilder:validation:Optional
 	JWTProvider *JWTProviderConfig `json:"jwtProvider,omitempty"`
