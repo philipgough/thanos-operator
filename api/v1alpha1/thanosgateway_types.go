@@ -23,6 +23,8 @@ import (
 
 // ThanosGatewaySpec defines the desired state of ThanosGateway
 type ThanosGatewaySpec struct {
+	// CommonFields are the options available to all Thanos components.
+	CommonFields `json:",inline"`
 	// Replicas is the number of proxy replicas.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
@@ -42,6 +44,14 @@ type ThanosGatewaySpec struct {
 	// MetricsWriteSpec defines the configuration for writing metrics.
 	// +kubebuilder:validation:Required
 	MetricsWriteSpec MetricsWriteSpec `json:"metricsWriteSpec"`
+	// When a resource is paused, no actions except for deletion
+	// will be performed on the underlying objects.
+	// +kubebuilder:validation:Optional
+	Paused *bool `json:"paused,omitempty"`
+	// Additional configuration for the component. Allows you to add
+	// additional args, containers, volumes, and volume mounts to Deployment.
+	// +kubebuilder:validation:Optional
+	Additional `json:",inline"`
 }
 
 // Policy is a list of CEL expressions and matchers.

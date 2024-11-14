@@ -18,16 +18,20 @@ package controller
 
 import (
 	"context"
+	"fmt"
+
 	"github.com/go-logr/logr"
+	monitoringthanosiov1alpha1 "github.com/thanos-community/thanos-operator/api/v1alpha1"
 	"github.com/thanos-community/thanos-operator/internal/pkg/handlers"
+	"github.com/thanos-community/thanos-operator/internal/pkg/manifests"
 	manifestcompact "github.com/thanos-community/thanos-operator/internal/pkg/manifests/compact"
+	manifestgateway "github.com/thanos-community/thanos-operator/internal/pkg/manifests/gateway"
 	controllermetrics "github.com/thanos-community/thanos-operator/internal/pkg/metrics"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/tools/record"
-
-	monitoringthanosiov1alpha1 "github.com/thanos-community/thanos-operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -38,10 +42,28 @@ type ThanosGatewayReconciler struct {
 	Scheme *runtime.Scheme
 
 	logger   logr.Logger
-	metrics  controllermetrics.ThanosCompactMetrics
+	metrics  controllermetrics.ThanosGatewayMetrics
 	recorder record.EventRecorder
 
 	handler *handlers.Handler
+}
+
+// NewThanosGatewayReconciler returns a reconciler for ThanosGateway resources.
+func NewThanosGatewayReconciler(conf Config, client client.Client, scheme *runtime.Scheme) *ThanosGatewayReconciler {
+	handler := handlers.NewHandler(client, scheme, conf.InstrumentationConfig.Logger)
+	featureGates := conf.FeatureGate.ToGVK()
+	if len(featureGates) > 0 {
+		handler.SetFeatureGates(featureGates)
+	}
+
+	return &ThanosGatewayReconciler{
+		Client:   client,
+		Scheme:   scheme,
+		logger:   conf.InstrumentationConfig.Logger,
+		metrics:  controllermetrics.NewThanosGatewayMetrics(conf.InstrumentationConfig.MetricsRegistry, conf.InstrumentationConfig.BaseMetrics),
+		recorder: conf.InstrumentationConfig.EventRecorder,
+		handler:  handler,
+	}
 }
 
 //+kubebuilder:rbac:groups=monitoring.thanos.io,resources=thanosgateways,verbs=get;list;watch;create;update;patch;delete
@@ -66,7 +88,7 @@ func (r *ThanosGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, nil
 		}
 		r.logger.Error(err, "failed to get ThanosGateway")
-		r.metrics.ReconciliationsFailedTotal.WithLabelValues(manifestcompact.Name).Inc()
+		r.metrics.ReconciliationsFailedTotal.WithLabelValues(manifestgateway.Name).Inc()
 		r.recorder.Event(gateway, corev1.EventTypeWarning, "GetFailed", "Failed to get ThanosGateway resource")
 		return ctrl.Result{}, err
 	}
@@ -77,6 +99,14 @@ func (r *ThanosGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
+	err = r.syncResources(ctx, *gateway)
+	if err != nil {
+		r.logger.Error(err, "failed to sync resources")
+		r.metrics.ReconciliationsFailedTotal.WithLabelValues(manifestgateway.Name).Inc()
+		r.recorder.Event(gateway, corev1.EventTypeWarning, "SyncFailed", fmt.Sprintf("Failed to sync resources: %v", err))
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -85,4 +115,21 @@ func (r *ThanosGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&monitoringthanosiov1alpha1.ThanosGateway{}).
 		Complete(r)
+}
+
+func (r *ThanosGatewayReconciler) syncResources(ctx context.Context, gateway monitoringthanosiov1alpha1.ThanosGateway) error {
+	var errCount int
+	opt := r.specToOptions(gateway)
+	errCount += r.handler.CreateOrUpdate(ctx, gateway.GetNamespace(), &gateway, opt.Build())
+
+	if errCount > 0 {
+		r.metrics.ClientErrorsTotal.WithLabelValues(manifestcompact.Name).Add(float64(errCount))
+		return fmt.Errorf("failed to create or update %d resources for gateway", errCount)
+	}
+
+	return nil
+}
+
+func (r *ThanosGatewayReconciler) specToOptions(gateway monitoringthanosiov1alpha1.ThanosGateway) manifests.Buildable {
+	return gatewayV1Alpha1ToOptions(gateway)
 }

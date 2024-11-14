@@ -126,3 +126,9 @@ func NewThanosCompactMetrics(reg prometheus.Registerer, baseMetrics *BaseMetrics
 		BaseMetrics: baseMetrics,
 	}
 }
+
+func NewThanosGatewayMetrics(reg prometheus.Registerer, baseMetrics *BaseMetrics) ThanosGatewayMetrics {
+	return ThanosGatewayMetrics{
+		BaseMetrics: baseMetrics,
+	}
+}

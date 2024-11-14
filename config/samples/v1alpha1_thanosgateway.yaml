@@ -1,3 +1,4 @@
+---
 apiVersion: monitoring.thanos.io/v1alpha1
 kind: ThanosGateway
 metadata:
@@ -6,4 +7,25 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: thanosgateway-sample
 spec:
-  # TODO(user): Add fields here
+  replicas: 1
+  metricsReadSpec:
+    policies:
+    - name: 'dev-only'
+      expression: 'token.user.username == "system:serviceaccount:default:alice"'
+      selectors:
+        - label_selector: '{env="dev"}'
+    - name: 'prod-only-with-exception'
+      expression: 'token.user.username == "system:serviceaccount:default:bob"'
+      selectors:
+        - label_selector: '{env="prod"}'
+          conditional_selector: '{__name__="up"}'
+    backendSpec:
+      backendConfig:
+        address: thanos-query-frontend-example-query
+        port: 9090
+  metricsWriteSpec:
+    backendSpec:
+      backendConfig:
+        address: thanos-receive-router-example-receive
+        port: 19291
+

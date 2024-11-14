@@ -4,5 +4,5 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: example.com/thanos-operator
-  newTag: v0.0.1
+  newName: quay.io/thanos/thanos-operator
+  newTag: gw-3-2024-11-01-7b45fe7

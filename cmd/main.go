@@ -27,11 +27,11 @@ import (
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
-
 	monitoringthanosiov1alpha1 "github.com/thanos-community/thanos-operator/api/v1alpha1"
 	"github.com/thanos-community/thanos-operator/internal/controller"
 	"github.com/thanos-community/thanos-operator/internal/pkg/manifests"
 	manifestscompact "github.com/thanos-community/thanos-operator/internal/pkg/manifests/compact"
+	manifestgateway "github.com/thanos-community/thanos-operator/internal/pkg/manifests/gateway"
 	manifestquery "github.com/thanos-community/thanos-operator/internal/pkg/manifests/query"
 	manifestreceive "github.com/thanos-community/thanos-operator/internal/pkg/manifests/receive"
 	manifestruler "github.com/thanos-community/thanos-operator/internal/pkg/manifests/ruler"
@@ -217,10 +217,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.ThanosGatewayReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	if err = controller.NewThanosGatewayReconciler(
+		buildConfig(manifestgateway.Name),
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ThanosGateway")
 		os.Exit(1)
 	}

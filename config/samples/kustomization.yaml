@@ -8,4 +8,5 @@ resources:
 - v1alpha1_thanosruler.yaml
 - v1alpha1_thanoscompact.yaml
 - v1alpha1_thanosgateway.yaml
+- crb.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

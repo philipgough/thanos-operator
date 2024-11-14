@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"github.com/philipgough/prom-auth-proxy/pkg/envoy"
+	"github.com/philipgough/prom-auth-proxy/pkg/lbac"
+	"github.com/philipgough/prom-auth-proxy/pkg/token_review"
 	"github.com/thanos-community/thanos-operator/api/v1alpha1"
 	"github.com/thanos-community/thanos-operator/internal/pkg/manifests"
 	manifestscompact "github.com/thanos-community/thanos-operator/internal/pkg/manifests/compact"
@@ -196,45 +199,97 @@ func compactV1Alpha1ToOptions(in v1alpha1.ThanosCompact) manifestscompact.Option
 
 func gatewayV1Alpha1ToOptions(in v1alpha1.ThanosGateway) manifestgateway.Options {
 	labels := manifests.MergeLabels(in.GetLabels(), nil)
-	opts := commonToOpts(&in, in.Spec.Replicas, labels, in.GetAnnotations(), v1alpha1.CommonThanosFields{}, v1alpha1.Additional{})
+	opts := commonToOpts(&in, in.Spec.Replicas, labels, in.GetAnnotations(), v1alpha1.CommonFields{}, nil, v1alpha1.Additional{})
 
-	var hm *manifestgateway.HeaderManipulationConfig
-	if in.Spec.HeaderManipulation != nil {
-		hm = &manifestgateway.HeaderManipulationConfig{
-			ExternalHeader: in.Spec.HeaderManipulation.FromHeader,
-			InternalHeader: in.Spec.HeaderManipulation.ToHeader,
+	toRawPolicies := func(in []v1alpha1.Policy) []lbac.RawPolicy {
+		if in == nil {
+			return nil
 		}
+		raw := make([]lbac.RawPolicy, 0, len(in))
+		for _, p := range in {
+			selectors := make([]lbac.RawSelector, 0, len(p.Selectors))
+			for _, s := range p.Selectors {
+				selectors = append(selectors, lbac.RawSelector{
+					LabelSelector:       s.LabelSelector,
+					ConditionalSelector: s.ConditionalSelector,
+				})
+			}
+
+			raw = append(raw, lbac.RawPolicy{
+				Name:          p.Name,
+				CELExpression: p.CELExpression,
+				Selectors:     selectors,
+			})
+		}
+		return raw
 	}
 
-	metricsReadOpts := manifestgateway.MetricsReadOptions{
-		BackendConfig: manifestgateway.Backend{
-			Address:         in.Spec.MetricsReadSpec.BackendConfig.Address,
-			Port:            int(in.Spec.MetricsReadSpec.BackendConfig.Port),
-			MatchRouteRegex: "^/api/v1/(query|query_range|series|label|labels|query_exemplars|targets|rules|metadata)$",
-			HeaderModification: manifestgateway.HeaderModification{
-				AddHeaders:    in.Spec.MetricsReadSpec.HeaderModification.AddHeaders,
-				RemoveHeaders: in.Spec.MetricsReadSpec.HeaderModification.RemoveHeaders,
+	// todo add health check
+	queryRegex := `/api/v1/(query|query_range|series|label|labels|query_exemplars|targets|rules|metadata)`
+
+	opts.Owner = "test"
+	embeddedOpts := envoy.Options{
+		Signal: "metrics",
+		ReadOptions: &envoy.ReadBackend{
+			BackendOptions: envoy.BackendOptions{
+				BackendConfig: envoy.Backend{
+					Address: in.Spec.MetricsReadSpec.BackendSpec.BackendConfig.Address,
+					Port:    uint32(in.Spec.MetricsReadSpec.BackendSpec.BackendConfig.Port),
+					Scheme:  "http",
+				},
+				MatchRouteRegex: queryRegex,
+				TokenAuthConfig: envoy.BackendTokenAuthConfig{
+					EnableKubernetesTokenReview: true,
+				},
+			},
+			RBACPolicies: nil,
+			LBACConfig: &envoy.LBACConfig{
+				ServerConfig: envoy.LBACServerConfig{
+					Address: "localhost",
+					Port:    lbac.ServerDefaultPort,
+				},
+				LBACPolicies: toRawPolicies(in.Spec.MetricsReadSpec.Policies),
 			},
 		},
-	}
-
-	metricsWriteOpts := manifestgateway.MetricsWriteOptions{
-		BackendConfig: manifestgateway.Backend{
-			Address:         in.Spec.MetricsWriteSpec.BackendConfig.Address,
-			Port:            int(in.Spec.MetricsWriteSpec.BackendConfig.Port),
-			MatchRouteRegex: "/api/v1/receive",
-			HeaderModification: manifestgateway.HeaderModification{
-				AddHeaders:    in.Spec.MetricsWriteSpec.HeaderModification.AddHeaders,
-				RemoveHeaders: in.Spec.MetricsWriteSpec.HeaderModification.RemoveHeaders,
+		WriteOptions: &envoy.WriteBackend{
+			BackendOptions: envoy.BackendOptions{
+				HeaderMutations: []envoy.HeaderMutation{
+					{
+						SetHeader: "THANOS-TENANT",
+						FromValue: envoy.ClientCertInfoPeerEmailSAN,
+					},
+				},
+				MTLSConfig: &envoy.MTLSConfig{
+					TrustedCA:  "/etc/envoy-proxy-remote-write/ca.crt",
+					ServerCert: "/etc/envoy-proxy-remote-write/tls.crt",
+					ServerKey:  "/etc/envoy-proxy-remote-write/tls.key",
+				},
+				BackendConfig: envoy.Backend{
+					Address: in.Spec.MetricsWriteSpec.BackendSpec.BackendConfig.Address,
+					Port:    uint32(in.Spec.MetricsWriteSpec.BackendSpec.BackendConfig.Port),
+					Scheme:  "http",
+				},
+				MatchRouteRegex: "/api/v1/receive",
+				TokenAuthConfig: envoy.BackendTokenAuthConfig{
+					EnableKubernetesTokenReview: false,
+				},
+			},
+			RBACPolicies: nil,
+		},
+		TokenAuthConfig: &envoy.TokenAuthConfig{
+			JWTProviders: nil,
+			TokenReview: &envoy.TokenReviewServer{
+				Address: "localhost",
+				Port:    token_review.ServerDefaultPort,
 			},
 		},
 	}
 
 	return manifestgateway.Options{
-		Options:             opts,
-		HeaderManipulation:  hm,
-		MetricsReadOptions:  metricsReadOpts,
-		MetricsWriteOptions: metricsWriteOpts,
+		Options:   opts,
+		Embedded:  embeddedOpts,
+		Namespace: in.GetNamespace(),
+		Replicas:  1,
 	}
 }
 
