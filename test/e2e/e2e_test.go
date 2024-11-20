@@ -17,20 +17,59 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	"github.com/thanos-community/thanos-operator/api/v1alpha1"
+	"github.com/thanos-community/thanos-operator/internal/controller"
+	"github.com/thanos-community/thanos-operator/internal/pkg/manifests"
+	"github.com/thanos-community/thanos-operator/internal/pkg/manifests/compact"
+	"github.com/thanos-community/thanos-operator/internal/pkg/manifests/receive"
 	"github.com/thanos-community/thanos-operator/test/utils"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
-const namespace = "thanos-operator-system"
+const (
+	namespace = "thanos-operator-system"
+
+	objStoreSecret    = "thanos-object-storage"
+	objStoreSecretKey = "thanos.yaml"
+
+	receiveName = "example-receive"
+	storeName   = "example-store"
+	queryName   = "example-query"
+	rulerName   = "example-ruler"
+	compactName = "example-compact"
+
+	prometheusPort = 9090
+
+	hashringName = "default"
+)
 
 var _ = Describe("controller", Ordered, func() {
+	var c client.Client
+
 	BeforeAll(func() {
+		logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 		By("installing prometheus operator")
 		Expect(utils.InstallPrometheusOperator()).To(Succeed())
 
@@ -40,6 +79,46 @@ var _ = Describe("controller", Ordered, func() {
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
 		_, _ = utils.Run(cmd)
+
+		By("install MinIO")
+		Expect(utils.InstallMinIO()).To(Succeed())
+
+		By("create secret")
+		Expect(utils.CreateMinioObjectStorageSecret()).To(Succeed())
+
+		scheme := runtime.NewScheme()
+		if err := v1alpha1.AddToScheme(scheme); err != nil {
+			fmt.Println("failed to add scheme")
+			os.Exit(1)
+		}
+		if err := appsv1.AddToScheme(scheme); err != nil {
+			fmt.Println("failed to add scheme")
+			os.Exit(1)
+		}
+		if err := corev1.AddToScheme(scheme); err != nil {
+			fmt.Println("failed to add scheme")
+			os.Exit(1)
+		}
+		if err := monitoringv1.AddToScheme(scheme); err != nil {
+			fmt.Println("failed to add scheme")
+			os.Exit(1)
+		}
+		if err := rbacv1.AddToScheme(scheme); err != nil {
+			fmt.Println("failed to add scheme")
+			os.Exit(1)
+		}
+
+		cl, err := client.New(config.GetConfigOrDie(), client.Options{
+			Scheme: scheme,
+		})
+		if err != nil {
+			fmt.Println("failed to create client")
+			os.Exit(1)
+		}
+		c = cl
+
+		By("Setup prometheus")
+		Expect(utils.SetUpPrometheus(c)).To(Succeed())
 	})
 
 	AfterAll(func() {
@@ -49,12 +128,16 @@ var _ = Describe("controller", Ordered, func() {
 		By("uninstalling the cert-manager bundle")
 		utils.UninstallCertManager()
 
+		By("uninstalling MinIO")
+		utils.UninstallMinIO()
+
 		By("removing manager namespace")
 		cmd := exec.Command("kubectl", "delete", "ns", namespace)
 		_, _ = utils.Run(cmd)
 	})
 
 	Context("Operator", func() {
+
 		It("should run successfully", func() {
 			var controllerPodName string
 			var err error
@@ -74,6 +157,7 @@ var _ = Describe("controller", Ordered, func() {
 			By("installing CRDs")
 			cmd = exec.Command("make", "install")
 			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
 
 			By("deploying the controller-manager")
 			cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectimage))
@@ -116,6 +200,403 @@ var _ = Describe("controller", Ordered, func() {
 			}
 			EventuallyWithOffset(1, verifyControllerUp, time.Minute, time.Second).Should(Succeed())
 
+		})
+	})
+
+	Describe("Thanos Receive", Ordered, func() {
+		routerName := controller.ReceiveRouterNameFromParent(receiveName)
+		ingesterName := controller.ReceiveIngesterNameFromParent(receiveName, hashringName)
+
+		Context("When ThanosReceive is created with hashrings", func() {
+			It("should bring up the ingest components", func() {
+				cr := &v1alpha1.ThanosReceive{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      receiveName,
+						Namespace: namespace,
+					},
+					Spec: v1alpha1.ThanosReceiveSpec{
+						Ingester: v1alpha1.IngesterSpec{
+							DefaultObjectStorageConfig: v1alpha1.ObjectStorageConfig{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: objStoreSecret,
+								},
+								Key: objStoreSecretKey,
+							},
+							Hashrings: []v1alpha1.IngesterHashringSpec{
+								{
+									Name:        hashringName,
+									StorageSize: "100Mi",
+								},
+							},
+						},
+					},
+				}
+				err := c.Create(context.Background(), cr, &client.CreateOptions{})
+				Expect(err).To(BeNil())
+				Eventually(func() bool {
+					return utils.VerifyStatefulSetReplicasRunning(c, 1, ingesterName, namespace)
+				}, time.Minute*5, time.Second*10).Should(BeTrue())
+			})
+
+			Context("When the ingesters have been created", func() {
+				It("should bring up the router components", func() {
+					Eventually(func() bool {
+						return utils.VerifyDeploymentReplicasRunning(c, 1, routerName, namespace)
+					}, time.Minute*5, time.Second*10).Should(BeTrue())
+				})
+				It("should create a ConfigMap with the correct hashring configuration", func() {
+					//nolint:lll
+					expect := fmt.Sprintf(`[
+    {
+        "hashring": "default",
+        "tenant_matcher_type": "exact",
+        "endpoints": [
+            {
+                "address": "%s-0.%s.thanos-operator-system.svc.cluster.local:10901",
+                "az": ""
+            }
+        ]
+    }
+]`, ingesterName, ingesterName)
+					Eventually(func() bool {
+						return utils.VerifyConfigMapContents(c, routerName, namespace, receive.HashringConfigKey, expect)
+					}, time.Minute*5, time.Second*10).Should(BeTrue())
+				})
+			})
+
+		})
+
+		Context("When ThanosReceive is fully operational", func() {
+			It("should accept metrics over remote write", func() {
+				ctx := context.Background()
+				selector := client.MatchingLabels{
+					manifests.ComponentLabel: receive.RouterComponentName,
+				}
+				router := &corev1.PodList{}
+				err := c.List(ctx, router, selector, &client.ListOptions{Namespace: namespace})
+				Expect(err).To(BeNil())
+				Expect(len(router.Items)).To(Equal(1))
+
+				pod := router.Items[0].Name
+				port := intstr.IntOrString{IntVal: receive.RemoteWritePort}
+				cancelFn, err := utils.StartPortForward(ctx, port, "https", pod, namespace)
+				Expect(err).To(BeNil())
+				defer cancelFn()
+
+				Eventually(func() error {
+					return utils.RemoteWrite(utils.DefaultRemoteWriteRequest(), nil, nil)
+				}, time.Minute*2, time.Second*5).Should(Succeed())
+
+			})
+		})
+
+	})
+
+	Describe("Thanos Query", Ordered, func() {
+		Context("When ThanosQuery is created", func() {
+			It("should bring up the thanos query components", func() {
+				cr := &v1alpha1.ThanosQuery{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      queryName,
+						Namespace: namespace,
+					},
+					Spec: v1alpha1.ThanosQuerySpec{
+						CommonFields: v1alpha1.CommonFields{},
+						Replicas:     1,
+						Labels: map[string]string{
+							"some-label": "xyz",
+						},
+						ReplicaLabels: []string{
+							"prometheus_replica",
+							"replica",
+							"rule_replica",
+						},
+						StoreLabelSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"operator.thanos.io/store-api": "true",
+							},
+						},
+					},
+				}
+				err := c.Create(context.Background(), cr, &client.CreateOptions{})
+				Expect(err).To(BeNil())
+
+				deploymentName := controller.QueryNameFromParent(queryName)
+				Eventually(func() bool {
+					return utils.VerifyDeploymentReplicasRunning(c, 1, deploymentName, namespace)
+				}, time.Minute*1, time.Second*10).Should(BeTrue())
+				svcName := controller.ReceiveIngesterNameFromParent(receiveName, hashringName)
+				Eventually(func() bool {
+					return utils.VerifyDeploymentArgs(c,
+						deploymentName,
+						namespace,
+						0,
+						fmt.Sprintf("--endpoint=dnssrv+_grpc._tcp.%s.thanos-operator-system.svc.cluster.local", svcName),
+					)
+				}, time.Minute*1, time.Second*10).Should(BeTrue())
+			})
+		})
+		Context("When Query Frontend is enabled", func() {
+			It("should bring up the query frontend components", func() {
+				tenSeconds := v1alpha1.Duration("10s")
+				updatedCR := &v1alpha1.ThanosQuery{}
+				err := c.Get(context.Background(), client.ObjectKey{Name: queryName, Namespace: namespace}, updatedCR)
+				Expect(err).To(BeNil())
+
+				updatedCR.Spec.QueryFrontend = &v1alpha1.QueryFrontendSpec{
+					Replicas:             2,
+					CompressResponses:    true,
+					LogQueriesLongerThan: &tenSeconds,
+					QueryRangeMaxRetries: 3,
+					LabelsMaxRetries:     3,
+					QueryLabelSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							manifests.DefaultQueryAPILabel: manifests.DefaultQueryAPIValue,
+						},
+					},
+				}
+				err = c.Update(context.Background(), updatedCR)
+				Expect(err).To(BeNil())
+				svcName := controller.QueryNameFromParent(queryName)
+				deploymentName := controller.QueryFrontendNameFromParent(queryName)
+				Eventually(func() bool {
+					return utils.VerifyDeploymentReplicasRunning(c, 2, deploymentName, namespace)
+				}, time.Minute*5, time.Second*10).Should(BeTrue())
+
+				Eventually(func() bool {
+					return utils.VerifyDeploymentArgs(c,
+						deploymentName,
+						namespace,
+						0,
+						"--query-frontend.downstream-url=http://"+svcName+"."+namespace+".svc.cluster.local:9090",
+					)
+				}, time.Minute*1, time.Second*10).Should(BeTrue())
+			})
+		})
+		Context("When a client changes the ThanosQuery CR", func() {
+			It("should update the Deployment", func() {
+
+				updatedCR := &v1alpha1.ThanosQuery{}
+				err := c.Get(context.Background(), client.ObjectKey{Name: queryName, Namespace: namespace}, updatedCR)
+				Expect(err).To(BeNil())
+				twentySeconds := v1alpha1.Duration("20s")
+
+				updatedCR.Spec.QueryFrontend.Replicas = 3
+				updatedCR.Spec.QueryFrontend.LogQueriesLongerThan = &twentySeconds
+
+				err = c.Update(context.Background(), updatedCR)
+				Expect(err).To(BeNil())
+
+				deploymentName := controller.QueryFrontendNameFromParent(queryName)
+				Eventually(func() bool {
+					return utils.VerifyDeploymentReplicasRunning(c, 3, deploymentName, namespace)
+				}, time.Minute*5, time.Second*10).Should(BeTrue())
+
+				Eventually(func() bool {
+					return utils.VerifyDeploymentArgs(c,
+						deploymentName,
+						namespace,
+						0,
+						"--query-frontend.log-queries-longer-than=20s",
+					)
+				}, time.Minute*1, time.Second*10).Should(BeTrue())
+			})
+		})
+	})
+
+	Describe("Thanos Ruler", Ordered, func() {
+		Context("When ThanosRuler is created", func() {
+			It("should bring up the rulers components", func() {
+				cr := &v1alpha1.ThanosRuler{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      rulerName,
+						Namespace: namespace,
+						Labels: map[string]string{
+							manifests.DefaultStoreAPILabel: manifests.DefaultStoreAPIValue,
+						},
+					},
+					Spec: v1alpha1.ThanosRulerSpec{
+						QueryLabelSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								manifests.DefaultQueryAPILabel: manifests.DefaultQueryAPIValue,
+							},
+						},
+						CommonFields: v1alpha1.CommonFields{},
+						StorageSize:  "100Mi",
+						ObjectStorageConfig: v1alpha1.ObjectStorageConfig{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: objStoreSecret,
+							},
+							Key: objStoreSecretKey,
+						},
+						AlertmanagerURL: "http://alertmanager.com:9093",
+					},
+				}
+				err := c.Create(context.Background(), cr, &client.CreateOptions{})
+				Expect(err).To(BeNil())
+
+				statefulSetName := controller.RulerNameFromParent(rulerName)
+				Eventually(func() bool {
+					return utils.VerifyStatefulSetReplicasRunning(c, 1, statefulSetName, namespace)
+				}, time.Minute*5, time.Second*10).Should(BeTrue())
+
+				svcName := controller.QueryNameFromParent(queryName)
+				Eventually(func() bool {
+					return utils.VerifyStatefulSetArgs(c,
+						statefulSetName,
+						namespace,
+						0,
+						fmt.Sprintf("--query=dnssrv+_http._tcp.%s.thanos-operator-system.svc.cluster.local", svcName),
+					)
+				}, time.Minute*1, time.Second*10).Should(BeTrue())
+
+				cfgmap := &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "my-rules",
+						Namespace: namespace,
+						Labels: map[string]string{
+							manifests.DefaultRuleConfigLabel: manifests.DefaultRuleConfigValue,
+						},
+					},
+					Data: map[string]string{
+						"my-rules.yaml": `groups:
+  - name: example
+    rules:
+      - alert: HighRequestRate
+        expr: sum(rate(http_requests_total[5m])) > 10
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: High request rate
+`,
+					},
+				}
+
+				err = c.Create(context.Background(), cfgmap, &client.CreateOptions{})
+				Expect(err).To(BeNil())
+
+				Eventually(func() bool {
+					return utils.VerifyStatefulSetArgs(c,
+						statefulSetName,
+						namespace,
+						0,
+						"--rule-file=/etc/thanos/rules/my-rules.yaml",
+					)
+				}, time.Minute*1, time.Second*10).Should(BeTrue())
+			})
+		})
+	})
+
+	Describe("Thanos Store", Ordered, func() {
+		Context("When ThanosStore is created", func() {
+			It("should bring up the store components", func() {
+				cr := &v1alpha1.ThanosStore{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      storeName,
+						Namespace: namespace,
+					},
+					Spec: v1alpha1.ThanosStoreSpec{
+						CommonFields: v1alpha1.CommonFields{},
+						Labels:       map[string]string{"some-label": "xyz"},
+						ShardingStrategy: v1alpha1.ShardingStrategy{
+							Type:          v1alpha1.Block,
+							Shards:        2,
+							ShardReplicas: 2,
+						},
+						StorageSize: "100Mi",
+						ObjectStorageConfig: v1alpha1.ObjectStorageConfig{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: objStoreSecret,
+							},
+							Key: objStoreSecretKey,
+						},
+					},
+				}
+
+				err := c.Create(context.Background(), cr, &client.CreateOptions{})
+				Expect(err).To(BeNil())
+				firstShard := controller.StoreNameFromParent(storeName, ptr.To(int32(0)))
+				Eventually(func() bool {
+					return utils.VerifyStatefulSetReplicasRunning(c, 2, firstShard, namespace)
+				}, time.Minute*5, time.Second*10).Should(BeTrue())
+
+				Eventually(func() bool {
+					expect := `--selector.relabel-config=
+- action: hashmod
+  source_labels: ["__block_id"]
+  target_label: shard
+  modulus: 2
+- action: keep
+  source_labels: ["shard"]
+  regex: 0`
+
+					return utils.VerifyStatefulSetArgs(c, firstShard, namespace, 0, expect)
+				}, time.Minute*5, time.Second*10).Should(BeTrue())
+			})
+		})
+	})
+
+	Describe("Thanos Compact", Ordered, func() {
+		Context("When ThanosCompact is created", func() {
+			It("should bring up the compact components", func() {
+				cr := &v1alpha1.ThanosCompact{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      compactName,
+						Namespace: namespace,
+					},
+					Spec: v1alpha1.ThanosCompactSpec{
+						CommonFields: v1alpha1.CommonFields{},
+						StorageSize:  "100Mi",
+						ObjectStorageConfig: v1alpha1.ObjectStorageConfig{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: objStoreSecret,
+							},
+							Key: objStoreSecretKey,
+						},
+					},
+				}
+
+				err := c.Create(context.Background(), cr, &client.CreateOptions{})
+				Expect(err).To(BeNil())
+
+				stsName := compact.Options{Options: manifests.Options{Owner: compactName}}.GetGeneratedResourceName()
+				Eventually(func() bool {
+					return utils.VerifyStatefulSetReplicasRunning(c, 1, stsName, namespace)
+				}, time.Minute*5, time.Second*10).Should(BeTrue())
+			})
+		})
+	})
+	Describe("Discover Thanos components as targets with Service Monitor Enabled", Ordered, func() {
+		Context("Discover Thanos Components as a target", func() {
+			It("Service Should be present in Up Metric", func() {
+				pods := &corev1.PodList{}
+				selector := client.MatchingLabels{
+					"prometheus": "test-prometheus",
+				}
+				err := c.List(context.Background(), pods, selector, &client.ListOptions{Namespace: "default"})
+				Expect(err).To(BeNil())
+				Expect(len(pods.Items)).To(Equal(1))
+
+				pod := pods.Items[0].Name
+				port := intstr.IntOrString{IntVal: prometheusPort}
+				cancelFn, err := utils.StartPortForward(context.Background(), port, "https", pod, "default")
+				Expect(err).To(BeNil())
+				defer cancelFn()
+
+				firstShard := controller.StoreNameFromParent(storeName, ptr.To(int32(0)))
+				secondShard := controller.StoreNameFromParent(storeName, ptr.To(int32(1)))
+				componentMap := map[string]struct{}{
+					controller.QueryNameFromParent(queryName): {},
+					firstShard:  {},
+					secondShard: {},
+					controller.CompactNameFromParent(compactName): {},
+				}
+				for component := range componentMap {
+					_, err := utils.QueryPrometheus("up{service=\"" + component + "\"}")
+					Expect(err).To(BeNil())
+				}
+			})
 		})
 	})
 })

@@ -1,4 +1,12 @@
 ## Append samples of your project ##
+namespace: thanos-operator-system
+
 resources:
-- _v1aplha1_thanosservice.yaml
+- v1alpha1_thanosquery.yaml
+- v1alpha1_thanosreceive.yaml
+- v1alpha1_thanosstore.yaml
+- v1alpha1_thanosruler.yaml
+- v1alpha1_thanoscompact.yaml
+- v1alpha1_thanosgateway.yaml
+- crb.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

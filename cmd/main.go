@@ -19,23 +19,38 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
+	"net/http"
+	"net/http/pprof"
 	"os"
+
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	"github.com/prometheus/client_golang/prometheus"
+	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
+	monitoringthanosiov1alpha1 "github.com/thanos-community/thanos-operator/api/v1alpha1"
+	"github.com/thanos-community/thanos-operator/internal/controller"
+	"github.com/thanos-community/thanos-operator/internal/pkg/manifests"
+	manifestscompact "github.com/thanos-community/thanos-operator/internal/pkg/manifests/compact"
+	manifestgateway "github.com/thanos-community/thanos-operator/internal/pkg/manifests/gateway"
+	manifestquery "github.com/thanos-community/thanos-operator/internal/pkg/manifests/query"
+	manifestreceive "github.com/thanos-community/thanos-operator/internal/pkg/manifests/receive"
+	manifestruler "github.com/thanos-community/thanos-operator/internal/pkg/manifests/ruler"
+	manifestsstore "github.com/thanos-community/thanos-operator/internal/pkg/manifests/store"
+	controllermetrics "github.com/thanos-community/thanos-operator/internal/pkg/metrics"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
-	monitoringthanosiov1aplha1 "github.com/thanos-community/thanos-operator/api/v1aplha1"
-	"github.com/thanos-community/thanos-operator/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -47,8 +62,9 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(monitoringthanosiov1aplha1.AddToScheme(scheme))
+	utilruntime.Must(monitoringthanosiov1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
+	utilruntime.Must(monitoringv1.AddToScheme(scheme))
 }
 
 func main() {
@@ -57,15 +73,20 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+
+	var featureGatePrometheusOperator bool
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
-		"Enable leader election for controller manager. "+
+		"EnableKubernetesTokenReview leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", false,
 		"If set the metrics endpoint is served securely")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&featureGatePrometheusOperator, "feature-gate.enable-service-monitors", true,
+		"If set, the operator will manage ServiceMonitors for Prometheus Operator")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -100,6 +121,13 @@ func main() {
 			BindAddress:   metricsAddr,
 			SecureServing: secureMetrics,
 			TLSOpts:       tlsOpts,
+			ExtraHandlers: map[string]http.Handler{
+				"/debug/pprof/":        http.HandlerFunc(pprof.Index),
+				"/debug/pprof/cmdline": http.HandlerFunc(pprof.Cmdline),
+				"/debug/pprof/profile": http.HandlerFunc(pprof.Profile),
+				"/debug/pprof/symbol":  http.HandlerFunc(pprof.Symbol),
+				"/debug/pprof/trace":   http.HandlerFunc(pprof.Trace),
+			},
 		},
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
@@ -122,11 +150,79 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.ThanosServiceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ThanosService")
+	ctrlmetrics.Registry.MustRegister(
+		versioncollector.NewCollector("thanos_operator"),
+	)
+
+	prometheus.DefaultRegisterer = ctrlmetrics.Registry
+	baseMetrics := controllermetrics.NewBaseMetrics(ctrlmetrics.Registry)
+	baseLogger := ctrl.Log.WithName(manifests.DefaultManagedByLabel)
+
+	buildConfig := func(component string) controller.Config {
+		return controller.Config{
+			FeatureGate: controller.FeatureGate{
+				EnableServiceMonitor: featureGatePrometheusOperator,
+			},
+			InstrumentationConfig: controller.InstrumentationConfig{
+				Logger:          baseLogger.WithName(component),
+				EventRecorder:   mgr.GetEventRecorderFor(fmt.Sprintf("%s-controller", component)),
+				MetricsRegistry: ctrlmetrics.Registry,
+				BaseMetrics:     baseMetrics,
+			},
+		}
+	}
+
+	if err = controller.NewThanosQueryReconciler(
+		buildConfig(manifestquery.Name),
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ThanosQuery")
+		os.Exit(1)
+	}
+
+	if err = controller.NewThanosReceiveReconciler(
+		buildConfig(manifestreceive.Name),
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ThanosReceive")
+		os.Exit(1)
+	}
+
+	if err = controller.NewThanosStoreReconciler(
+		buildConfig(manifestsstore.Name),
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ThanosStore")
+		os.Exit(1)
+	}
+
+	if err = controller.NewThanosCompactReconciler(
+		buildConfig(manifestscompact.Name),
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ThanosCompact")
+		os.Exit(1)
+	}
+
+	if err = controller.NewThanosRulerReconciler(
+		buildConfig(manifestruler.Name),
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ThanosRuler")
+		os.Exit(1)
+	}
+
+	if err = controller.NewThanosGatewayReconciler(
+		buildConfig(manifestgateway.Name),
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ThanosGateway")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
