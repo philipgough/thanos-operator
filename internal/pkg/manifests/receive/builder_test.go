@@ -17,6 +17,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
@@ -374,4 +375,105 @@ func TestKubeResourceSyncFeatureGate_Golden(t *testing.T) {
 	// ... test implementation will be updated later
 }
 */
+}
+
+func TestKubeResourceSyncRBAC(t *testing.T) {
+	tests := []struct {
+		name                string
+		featureGateEnabled  bool
+		expectedRBACObjects int
+	}{
+		{
+			name:                "kube-resource-sync disabled - no RBAC",
+			featureGateEnabled:  false,
+			expectedRBACObjects: 0,
+		},
+		{
+			name:                "kube-resource-sync enabled - RBAC created",
+			featureGateEnabled:  true,
+			expectedRBACObjects: 2, // Role + RoleBinding
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := RouterOptions{
+				Options: manifests.Options{
+					Owner:     "test-receive",
+					Namespace: "test-ns",
+					Image:     ptr.To("quay.io/thanos/thanos:latest"),
+				},
+				HashringConfig: `[{"hashring": "test"}]`,
+			}
+
+			if tt.featureGateEnabled {
+				opts.FeatureGates = &v1alpha1.FeatureGates{
+					KubeResourceSyncConfig: &v1alpha1.KubeResourceSyncConfig{
+						Enable: ptr.To(true),
+					},
+				}
+			}
+
+			objects := opts.Build()
+
+			// Count RBAC objects (Role and RoleBinding)
+			rbacCount := 0
+			var role *rbacv1.Role
+			var roleBinding *rbacv1.RoleBinding
+
+			for _, obj := range objects {
+				switch o := obj.(type) {
+				case *rbacv1.Role:
+					rbacCount++
+					role = o
+				case *rbacv1.RoleBinding:
+					rbacCount++
+					roleBinding = o
+				}
+			}
+
+			if rbacCount != tt.expectedRBACObjects {
+				t.Errorf("expected %d RBAC objects, got %d", tt.expectedRBACObjects, rbacCount)
+			}
+
+			if tt.featureGateEnabled {
+				// Verify Role permissions
+				if role == nil {
+					t.Error("expected Role to be created when feature gate is enabled")
+				} else {
+					expectedRules := []rbacv1.PolicyRule{
+						{
+							APIGroups: []string{""},
+							Resources: []string{"configmaps"},
+							Verbs:     []string{"get", "list", "watch"},
+						},
+					}
+					if !reflect.DeepEqual(role.Rules, expectedRules) {
+						t.Errorf("expected Role rules %v, got %v", expectedRules, role.Rules)
+					}
+				}
+
+				// Verify RoleBinding
+				if roleBinding == nil {
+					t.Error("expected RoleBinding to be created when feature gate is enabled")
+				} else {
+					if roleBinding.RoleRef.Name != opts.GetGeneratedResourceName() {
+						t.Errorf("expected RoleBinding to reference role %s, got %s",
+							opts.GetGeneratedResourceName(), roleBinding.RoleRef.Name)
+					}
+
+					expectedSubjects := []rbacv1.Subject{
+						{
+							Kind:      "ServiceAccount",
+							Name:      opts.GetGeneratedResourceName(),
+							Namespace: opts.Namespace,
+						},
+					}
+					if !reflect.DeepEqual(roleBinding.Subjects, expectedSubjects) {
+						t.Errorf("expected RoleBinding subjects %v, got %v", expectedSubjects, roleBinding.Subjects)
+					}
+				}
+			}
+		})
+	}
 }
