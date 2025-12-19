@@ -4836,9 +4836,6 @@ spec:
                     type: integer
                 type: object
               featureGates:
-                default:
-                  serviceMonitor:
-                    enable: true
                 description: FeatureGates are feature gates for the compact component.
                 properties:
                   podDisruptionBudget:
@@ -10296,9 +10293,6 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               featureGates:
-                default:
-                  serviceMonitor:
-                    enable: true
                 description: FeatureGates are feature gates for the compact component.
                 properties:
                   podDisruptionBudget:
@@ -16243,9 +16237,6 @@ spec:
             description: Spec defines the desired state of ThanosReceive
             properties:
               featureGates:
-                default:
-                  serviceMonitor:
-                    enable: true
                 description: FeatureGates are feature gates for the compact component.
                 properties:
                   podDisruptionBudget:
@@ -31674,8 +31665,6 @@ spec:
               featureGates:
                 default:
                   prometheusRuleEnabled: true
-                  serviceMonitor:
-                    enable: true
                 description: FeatureGates are feature gates for the rule component.
                 properties:
                   podDisruptionBudget:
@@ -37224,9 +37213,6 @@ spec:
                     type: object
                 type: object
               featureGates:
-                default:
-                  serviceMonitor:
-                    enable: true
                 description: FeatureGates are feature gates for the compact component.
                 properties:
                   podDisruptionBudget:
