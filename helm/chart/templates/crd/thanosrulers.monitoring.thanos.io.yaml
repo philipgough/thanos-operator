@@ -4558,8 +4558,6 @@ spec:
                             featureGates:
                                 default:
                                     prometheusRuleEnabled: true
-                                    serviceMonitor:
-                                        enable: true
                                 description: FeatureGates are feature gates for the rule component.
                                 properties:
                                     podDisruptionBudget:
