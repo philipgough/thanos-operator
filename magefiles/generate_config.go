@@ -28,7 +28,7 @@ func (c Config) Generate() error {
 	managerGen := c.generator("manager")
 	managerGen.Add("manager.yaml",
 		encoding.GhodssYAML(config.ControllerManagerNamespace(),
-			config.ControllerManagerDeployment(config.WithPrometheusRule())),
+			config.ControllerManagerDeployment(config.WithPrometheusRule(), config.WithServiceMonitor(), config.WithSync())),
 	)
 
 	prometheusGen := c.generator("prometheus")

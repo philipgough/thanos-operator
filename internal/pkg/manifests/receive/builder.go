@@ -80,11 +80,12 @@ type TenancyOpts struct {
 // RouterOptions for Thanos Receive router
 type RouterOptions struct {
 	manifests.Options
-	ReplicationFactor   int32
-	ExternalLabels      map[string]string
-	HashringConfig      string
-	HashringAlgorithm   string
-	ReplicationProtocol string
+	ReplicationFactor     int32
+	ExternalLabels        map[string]string
+	HashringConfig        string
+	HashringAlgorithm     string
+	ReplicationProtocol   string
+	EnableKubeResourceSync bool
 }
 
 // Build builds the ingester for Thanos Receive
@@ -136,7 +137,7 @@ func (opts RouterOptions) Build() []client.Object {
 	objs = append(objs, newRouterDeployment(opts, selectorLabels, objectMetaLabels))
 	objs = append(objs, newHashringConfigMap(name, opts.Namespace, opts.HashringConfig, objectMetaLabels))
 
-	if manifests.HasKubeResourceSyncEnabled(opts.FeatureGates) {
+	if opts.EnableKubeResourceSync {
 		objs = append(objs, newRouterRole(name, opts.Namespace, objectMetaLabels))
 		objs = append(objs, newRouterRoleBinding(name, opts.Namespace, objectMetaLabels))
 	}
@@ -641,10 +642,10 @@ func serviceMonitorOpts(from *manifests.ServiceMonitorConfig) manifests.ServiceM
 	}
 }
 
-// buildRouterVolumes builds the volumes for the router pod based on feature gate settings
+// buildRouterVolumes builds the volumes for the router pod
 func buildRouterVolumes(opts RouterOptions, name string) []corev1.Volume {
-	if manifests.HasKubeResourceSyncEnabled(opts.FeatureGates) {
-		// When kube-resource-sync is enabled, use emptyDir for shared volume
+	if opts.EnableKubeResourceSync {
+		// When KubeResourceSync is enabled, use EmptyDir and let the sidecar sync from ConfigMap
 		return []corev1.Volume{
 			{
 				Name: hashringVolumeName,
@@ -671,14 +672,14 @@ func buildRouterVolumes(opts RouterOptions, name string) []corev1.Volume {
 	}
 }
 
-// buildRouterContainers builds the containers for the router pod based on feature gate settings
+// buildRouterContainers builds the containers for the router pod
 func buildRouterContainers(opts RouterOptions) []corev1.Container {
 	containers := []corev1.Container{buildThanosRouterContainer(opts)}
-
-	if manifests.HasKubeResourceSyncEnabled(opts.FeatureGates) {
+	
+	if opts.EnableKubeResourceSync {
 		containers = append(containers, buildKubeResourceSyncContainer(opts))
 	}
-
+	
 	return containers
 }
 
@@ -775,30 +776,23 @@ func buildThanosRouterContainer(opts RouterOptions) corev1.Container {
 
 // buildKubeResourceSyncContainer builds the kube-resource-sync sidecar container
 func buildKubeResourceSyncContainer(opts RouterOptions) corev1.Container {
-	image := "quay.io/philipgough/kube-resource-sync:main"
-	if opts.FeatureGates.KubeResourceSyncConfig.Image != nil {
-		image = *opts.FeatureGates.KubeResourceSyncConfig.Image
-	}
-
-	container := corev1.Container{
+	return corev1.Container{
 		Name:            kubeResourceSyncContainerName,
-		Image:           image,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           "quay.io/philipgough/kube-resource-sync:main", // Default image
+		ImagePullPolicy: corev1.PullAlways,
 		SecurityContext: &corev1.SecurityContext{
 			RunAsNonRoot:             ptr.To(true),
 			AllowPrivilegeEscalation: ptr.To(false),
 			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{
-					"ALL",
-				},
+				Drop: []corev1.Capability{"ALL"},
 			},
 		},
 		Args: []string{
-			"--resource-type=configmap",
-			"--resource-name=" + opts.GetGeneratedResourceName(),
-			"--namespace=" + opts.Namespace,
-			"--resource-key=" + HashringConfigKey,
-			"--write-path=" + hashringMountPath + "/" + HashringConfigKey,
+			"-resource-type=configmap",
+			"-resource-name=" + opts.GetGeneratedResourceName(),
+			"-namespace=" + opts.Namespace,
+			"-write-path=" + hashringMountPath + "/" + HashringConfigKey,
+			"-resource-key=" + HashringConfigKey,
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{
@@ -809,17 +803,10 @@ func buildKubeResourceSyncContainer(opts RouterOptions) corev1.Container {
 		TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 	}
-
-	// Apply resource requirements if specified
-	if opts.FeatureGates.KubeResourceSyncConfig.ResourceRequirements != nil {
-		container.Resources = *opts.FeatureGates.KubeResourceSyncConfig.ResourceRequirements
-	}
-
-	return container
 }
 
-// newRouterRole creates a Role for the router when kube-resource-sync is enabled
-func newRouterRole(name, namespace string, labels map[string]string) *rbacv1.Role {
+// newRouterRole creates a Role for the router when KubeResourceSync is enabled
+func newRouterRole(name, namespace string, objectMetaLabels map[string]string) *rbacv1.Role {
 	return &rbacv1.Role{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Role",
@@ -828,7 +815,7 @@ func newRouterRole(name, namespace string, labels map[string]string) *rbacv1.Rol
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    labels,
+			Labels:    objectMetaLabels,
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
@@ -840,8 +827,8 @@ func newRouterRole(name, namespace string, labels map[string]string) *rbacv1.Rol
 	}
 }
 
-// newRouterRoleBinding creates a RoleBinding for the router when kube-resource-sync is enabled
-func newRouterRoleBinding(name, namespace string, labels map[string]string) *rbacv1.RoleBinding {
+// newRouterRoleBinding creates a RoleBinding for the router when KubeResourceSync is enabled
+func newRouterRoleBinding(name, namespace string, objectMetaLabels map[string]string) *rbacv1.RoleBinding {
 	return &rbacv1.RoleBinding{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "RoleBinding",
@@ -850,12 +837,7 @@ func newRouterRoleBinding(name, namespace string, labels map[string]string) *rba
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    labels,
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
-			Name:     name,
+			Labels:    objectMetaLabels,
 		},
 		Subjects: []rbacv1.Subject{
 			{
@@ -864,5 +846,11 @@ func newRouterRoleBinding(name, namespace string, labels map[string]string) *rba
 				Namespace: namespace,
 			},
 		},
+		RoleRef: rbacv1.RoleRef{
+			Kind:     "Role",
+			Name:     name,
+			APIGroup: rbacv1.SchemeGroupVersion.Group,
+		},
 	}
 }
+

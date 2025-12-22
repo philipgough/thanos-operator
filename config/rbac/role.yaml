@@ -112,24 +112,13 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
+  - rolebindings
   - roles
   verbs:
+  - create
+  - delete
   - get
   - list
-  - watch
-  - create
-  - update
   - patch
-  - delete
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
-  - rolebindings
-  verbs:
-  - get
-  - list
-  - watch
-  - create
   - update
-  - patch
-  - delete
+  - watch
