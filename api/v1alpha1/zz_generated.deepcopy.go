@@ -1360,8 +1360,8 @@ func (in *ThanosRulerSpec) DeepCopyInto(out *ThanosRulerSpec) {
 		(*in).DeepCopyInto(*out)
 	}
 	in.ObjectStorageConfig.DeepCopyInto(&out.ObjectStorageConfig)
-	if in.RuleConfigSelector != nil {
-		in, out := &in.RuleConfigSelector, &out.RuleConfigSelector
+	if in.PrometheusRuleOrRuleConfigMapSelector != nil {
+		in, out := &in.PrometheusRuleOrRuleConfigMapSelector, &out.PrometheusRuleOrRuleConfigMapSelector
 		*out = new(v1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
@@ -1383,7 +1383,6 @@ func (in *ThanosRulerSpec) DeepCopyInto(out *ThanosRulerSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	in.PrometheusRuleSelector.DeepCopyInto(&out.PrometheusRuleSelector)
 	if in.RuleTenancyConfig != nil {
 		in, out := &in.RuleTenancyConfig, &out.RuleTenancyConfig
 		*out = new(RuleTenancyConfig)

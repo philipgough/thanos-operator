@@ -108,7 +108,7 @@ config:
 						},
 						Key: "thanos.yaml",
 					},
-					PrometheusRuleSelector: metav1.LabelSelector{
+					PrometheusRuleOrRuleConfigMapSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							manifests.DefaultPrometheusRuleLabel: manifests.DefaultPrometheusRuleValue,
 						},
