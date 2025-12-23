@@ -102,6 +102,10 @@ Feature flags can be enabled using the `--enable-feature` flag. The following fe
 
 `prometheus-rule` - Enables PrometheusRule discovery for Thanos Ruler. This requires Prometheus Operator to be installed in the cluster. This allows ThanosRuler to discover PrometheusRule objects in the cluster and apply them to itself.
 
+`kube-resource-sync` - Enables [kube-resource-sync](https://github.com/philipgough/kube-resource-sync) sidecar for Thanos Receive router deployments. This provides immediate synchronization of ConfigMap changes without requiring pod restarts.
+
+http://localhost:9090/query?g0.expr=++thanos_receive_config_hash+or+thanos_operator_receive_hashring_hash&g0.show_tree=0&g0.tab=graph&g0.range_input=15m&g0.res_type=auto&g0.res_density=low&g0.display_mode=lines&g0.show_exemplars=0&g1.expr=thanos_receive_config_hash&g1.show_tree=0&g1.tab=graph&g1.range_input=1h&g1.res_type=auto&g1.res_density=medium&g1.display_mode=lines&g1.show_exemplars=0&g2.expr=sum+by+%28code%29%28rate%28http_requests_total%7Bnamespace%3D%22thanos-operator-system%22%7D%5B2m%5D%29%29&g2.show_tree=0&g2.tab=graph&g2.range_input=1h&g2.res_type=auto&g2.res_density=medium&g2.display_mode=lines&g2.show_exemplars=0
+
 ## Contributing and development
 
 Requirements to build, and test the project,
